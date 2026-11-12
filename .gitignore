@@ -1,0 +1,52 @@
+# --- Окружение Python ---
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Датасеты (сотни МБ – гигабайты) ---
+exports/
+exports_*/
+*.npy
+*.npz
+*.ply
+*.las
+*.laz
+
+# --- Артефакты прогонов и обучения ---
+runs/
+tests/
+mlstudio-logs/
+*.log
+study.db
+*.pth
+*.pt
+*.ckpt
+*.onnx
+checkpoints/
+trials.csv
+
+# --- Rust / сборка ---
+mlstudio/target/
+target/
+*.pdb
+*.exe
+mlstudio.exe
+
+# --- Бинарные документы (referat / referat_cross) ---
+referat/
+referat_cross/
+*.pptx
+*.docx
+*.pdf
+
+# --- Редакторы и ОС ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

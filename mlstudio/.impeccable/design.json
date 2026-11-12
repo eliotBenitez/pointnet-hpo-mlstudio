@@ -1,0 +1,650 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-07T16:33:48+00:00",
+  "title": "Design System: ML Studio",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Фон",
+        "canonical": "#F6F6F7",
+        "tonalRamp": [
+          "#242428",
+          "#3F3F47",
+          "#5B5B66",
+          "#767685",
+          "#9595A1",
+          "#B4B4BC",
+          "#D3D3D8",
+          "#F2F2F3"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Поверхность",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Ступень выше",
+        "canonical": "#EDEEF0",
+        "tonalRamp": [
+          "#23252A",
+          "#3D414A",
+          "#585E69",
+          "#727A89",
+          "#9298A4",
+          "#B2B6BE",
+          "#D1D4D9",
+          "#F1F2F3"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Краска",
+        "canonical": "#16181D",
+        "tonalRamp": [
+          "#21242B",
+          "#3A3F4D",
+          "#535B6E",
+          "#6C768F",
+          "#8D95A9",
+          "#AEB4C2",
+          "#CFD3DB",
+          "#F0F2F4"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Приглушённая краска",
+        "canonical": "#5F6672",
+        "tonalRamp": [
+          "#23252A",
+          "#3D424A",
+          "#585E69",
+          "#727B89",
+          "#9298A4",
+          "#B2B6BE",
+          "#D1D4D9",
+          "#F1F2F3"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Линейка",
+        "canonical": "#E3E4E8",
+        "tonalRamp": [
+          "#22242A",
+          "#3D3F4A",
+          "#575B6A",
+          "#71768A",
+          "#9195A5",
+          "#B1B4BF",
+          "#D1D3D9",
+          "#F1F2F4"
+        ]
+      },
+      "rail": {
+        "role": "neutral",
+        "displayName": "Рельс",
+        "canonical": "#EFEFF1",
+        "tonalRamp": [
+          "#242429",
+          "#3F3F48",
+          "#5A5A67",
+          "#757586",
+          "#9494A2",
+          "#B3B3BD",
+          "#D2D2D8",
+          "#F1F1F3"
+        ]
+      },
+      "win-green": {
+        "role": "primary",
+        "displayName": "Зелень выше линии",
+        "canonical": "#1F8A5B",
+        "tonalRamp": [
+          "#0E3E29",
+          "#196E49",
+          "#239E68",
+          "#2ECD87",
+          "#5BDAA3",
+          "#8BE5BD",
+          "#BBF0D8",
+          "#EAFAF3"
+        ]
+      },
+      "scoreboard-amber": {
+        "role": "secondary",
+        "displayName": "Табло-янтарь",
+        "canonical": "#F2A900",
+        "tonalRamp": [
+          "#4C3500",
+          "#875E00",
+          "#C18700",
+          "#FBB000",
+          "#FFC337",
+          "#FFD471",
+          "#FFE6AB",
+          "#FFF7E6"
+        ]
+      },
+      "amber-ink": {
+        "role": "secondary",
+        "displayName": "Янтарная краска",
+        "canonical": "#8A5D00",
+        "tonalRamp": [
+          "#4C3400",
+          "#875B00",
+          "#C18200",
+          "#FBA900",
+          "#FFBE37",
+          "#FFD171",
+          "#FFE4AB",
+          "#FFF7E6"
+        ]
+      },
+      "loss-red": {
+        "role": "tertiary",
+        "displayName": "Красный вылета",
+        "canonical": "#D13438",
+        "tonalRamp": [
+          "#3E0E0F",
+          "#6E191B",
+          "#9D2427",
+          "#CD2E32",
+          "#DA5C5F",
+          "#E58B8D",
+          "#F0BBBC",
+          "#FAEAEB"
+        ]
+      },
+      "chip-ink": {
+        "role": "neutral",
+        "displayName": "Краска плашки",
+        "canonical": "#14171C",
+        "tonalRamp": [
+          "#20252D",
+          "#38414F",
+          "#505D71",
+          "#697893",
+          "#8A97AC",
+          "#ACB5C4",
+          "#CED3DC",
+          "#F0F2F4"
+        ]
+      },
+      "band-white": {
+        "role": "neutral",
+        "displayName": "Белый на заливке",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "night-paper": {
+        "role": "neutral",
+        "displayName": "Ночной фон",
+        "canonical": "#0E1013",
+        "tonalRamp": [
+          "#20252C",
+          "#39414E",
+          "#525E6F",
+          "#6B7A91",
+          "#8C98AA",
+          "#ADB6C3",
+          "#CFD4DB",
+          "#F0F2F4"
+        ]
+      },
+      "night-surface": {
+        "role": "neutral",
+        "displayName": "Ночная поверхность",
+        "canonical": "#15181D",
+        "tonalRamp": [
+          "#20252C",
+          "#39414E",
+          "#515D70",
+          "#6A7992",
+          "#8B97AB",
+          "#ADB5C3",
+          "#CED3DC",
+          "#F0F2F4"
+        ]
+      },
+      "night-raised": {
+        "role": "neutral",
+        "displayName": "Ночная ступень выше",
+        "canonical": "#1D2128",
+        "tonalRamp": [
+          "#20252C",
+          "#39404E",
+          "#515C70",
+          "#6A7892",
+          "#8B96AB",
+          "#ADB5C3",
+          "#CED3DC",
+          "#F0F2F4"
+        ]
+      },
+      "night-ink": {
+        "role": "neutral",
+        "displayName": "Ночная краска",
+        "canonical": "#E8EAED",
+        "tonalRamp": [
+          "#22252B",
+          "#3B424C",
+          "#555E6C",
+          "#6E7B8D",
+          "#8F98A7",
+          "#AFB6C1",
+          "#D0D4DA",
+          "#F1F2F4"
+        ]
+      },
+      "night-muted": {
+        "role": "neutral",
+        "displayName": "Ночная приглушённая",
+        "canonical": "#8A919C",
+        "tonalRamp": [
+          "#232629",
+          "#3E4249",
+          "#585F69",
+          "#737B88",
+          "#9299A3",
+          "#B2B7BE",
+          "#D2D4D9",
+          "#F1F2F3"
+        ]
+      },
+      "night-rule": {
+        "role": "neutral",
+        "displayName": "Ночная линейка",
+        "canonical": "#252A32",
+        "tonalRamp": [
+          "#21252C",
+          "#39414D",
+          "#525D6F",
+          "#6B7990",
+          "#8C97AA",
+          "#ADB6C3",
+          "#CFD4DB",
+          "#F0F2F4"
+        ]
+      },
+      "night-rail": {
+        "role": "neutral",
+        "displayName": "Ночной рельс",
+        "canonical": "#0B0D10",
+        "tonalRamp": [
+          "#1F252D",
+          "#374150",
+          "#4F5D72",
+          "#667995",
+          "#8897AD",
+          "#ABB5C5",
+          "#CDD4DD",
+          "#F0F2F5"
+        ]
+      },
+      "night-amber-ink": {
+        "role": "secondary",
+        "displayName": "Ночная янтарная краска",
+        "canonical": "#F5C04A",
+        "tonalRamp": [
+          "#483304",
+          "#805A07",
+          "#B7810A",
+          "#EEA80D",
+          "#F5BD41",
+          "#F8D078",
+          "#FBE3B0",
+          "#FEF7E7"
+        ]
+      },
+      "night-win": {
+        "role": "primary",
+        "displayName": "Ночная зелень",
+        "canonical": "#3FB27F",
+        "tonalRamp": [
+          "#143928",
+          "#236447",
+          "#328F66",
+          "#42BA84",
+          "#6BCBA0",
+          "#96DABC",
+          "#C1E9D7",
+          "#ECF8F3"
+        ]
+      },
+      "night-loss": {
+        "role": "tertiary",
+        "displayName": "Ночной красный",
+        "canonical": "#E5484D",
+        "tonalRamp": [
+          "#430A0B",
+          "#761114",
+          "#A9181D",
+          "#DC1F25",
+          "#E65054",
+          "#ED8386",
+          "#F5B6B8",
+          "#FCE9E9"
+        ]
+      },
+      "class-ground": {
+        "role": "class",
+        "displayName": "Грунт",
+        "canonical": "#8A5A2B",
+        "tonalRamp": [
+          "#3A2612",
+          "#674320",
+          "#93602E",
+          "#C07D3C",
+          "#CF9A66",
+          "#DDB893",
+          "#EBD5BF",
+          "#F9F2EC"
+        ]
+      },
+      "class-vegetation": {
+        "role": "class",
+        "displayName": "Растительность",
+        "canonical": "#3B7A37",
+        "tonalRamp": [
+          "#1A3518",
+          "#2D5D2A",
+          "#40853C",
+          "#54AD4E",
+          "#79C175",
+          "#A0D39D",
+          "#C7E5C5",
+          "#EEF7ED"
+        ]
+      },
+      "class-noise": {
+        "role": "class",
+        "displayName": "Шум",
+        "canonical": "#8E3B8C",
+        "tonalRamp": [
+          "#361635",
+          "#5F285E",
+          "#883986",
+          "#B24AAF",
+          "#C471C2",
+          "#D59BD4",
+          "#E6C4E6",
+          "#F8EDF7"
+        ]
+      },
+      "class-building": {
+        "role": "class",
+        "displayName": "Здания",
+        "canonical": "#3D4C60",
+        "tonalRamp": [
+          "#1E252F",
+          "#344152",
+          "#4B5D76",
+          "#627A9A",
+          "#8498B1",
+          "#A8B6C8",
+          "#CCD4DE",
+          "#EFF2F5"
+        ]
+      },
+      "class-water": {
+        "role": "class",
+        "displayName": "Вода",
+        "canonical": "#2867A8",
+        "tonalRamp": [
+          "#0F263E",
+          "#1A436D",
+          "#25609C",
+          "#307CCB",
+          "#5D9AD8",
+          "#8CB7E4",
+          "#BBD5EF",
+          "#EAF2FA"
+        ]
+      },
+      "class-fallback": {
+        "role": "class",
+        "displayName": "Прочее",
+        "canonical": "#4A4F57",
+        "tonalRamp": [
+          "#232629",
+          "#3E4249",
+          "#595F68",
+          "#747B88",
+          "#9399A3",
+          "#B2B7BE",
+          "#D2D4D8",
+          "#F1F2F3"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "score": {
+        "displayName": "Счёт",
+        "purpose": "F1 матча 64px; 56px для «Лучший F1» на странице прогона."
+      },
+      "display": {
+        "displayName": "Заголовок страницы",
+        "purpose": "«Новый запуск», пустое состояние трансляции."
+      },
+      "headline": {
+        "displayName": "Имя прогона",
+        "purpose": "Имя прогона на шапке, имя датасета."
+      },
+      "stat": {
+        "displayName": "Крупное число",
+        "purpose": "Числа датасета; словесный знак в рельсе, «3D-превью»."
+      },
+      "title": {
+        "displayName": "Заголовок панели",
+        "purpose": "«Таблица тура», «Прогоны», «Датасеты»."
+      },
+      "section": {
+        "displayName": "Секция формы",
+        "purpose": "Секции формы запуска над линейкой."
+      },
+      "body": {
+        "displayName": "Текст",
+        "purpose": "Весь интерфейс и ячейки таблиц."
+      },
+      "label": {
+        "displayName": "Подпись",
+        "purpose": "Прописные подписи над числами, шапки колонок."
+      },
+      "mono": {
+        "displayName": "Моно",
+        "purpose": "Лог и превью команды."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "live-pulse",
+        "value": "opacity 0.65 -> 1.0 -> 0.65, 1600ms, ease-in-out, infinite",
+        "purpose": "Плашка «В ЭФИРЕ»."
+      },
+      {
+        "name": "tab-fade",
+        "value": "opacity 0 -> 1, 180ms, ease-in-out",
+        "purpose": "Проявление тела рабочей области при смене вкладки."
+      },
+      {
+        "name": "hover-dim",
+        "value": "opacity 0.88 on hover, без перехода",
+        "purpose": "Наведение на кнопки шапки и кнопки-иконки."
+      }
+    ],
+    "breakpoints": [],
+    "themes": {
+      "light": "paper / surface cards / ink / neutral rail",
+      "dark": "night-paper / night-surface cards / night-ink / night-rail"
+    },
+    "knownLimits": [
+      "Цвет пунктира опорной линии на графике задаёт тема gpui-component, а не палитра; поэтому легенда в заголовке графика называет линию словами и красными штрихами.",
+      "Первая точка графика может стоять вплотную к подписям шкалы Y.",
+      "Заголовок окна рисует ОС (нативный title bar), он не входит в мир.",
+      "Отрисовка на Linux не проверялась; имя семейства «PT Sans Narrow» там не подтверждено.",
+      "Цвета режима «Ошибки» в 3D-превью — фиксированные hex в src/cloud.rs, не из палитры и не зависят от темы: TP #2EAD5B, FP #E8452C, FN #F2C200, TN #5B6068, непокрытые точки #30343B."
+    ]
+  },
+  "components": [
+    {
+      "name": "Шапка прогона",
+      "kind": "custom",
+      "refersTo": "run-header",
+      "description": "Скруглённая карточка с оттенком цвета класса: имя прогона, статус, действия.",
+      "html": "<div class=\"ds-head\"><div><div class=\"ds-head-title\">ground_xyz</div><div class=\"ds-head-sub\">Грунт · xyz</div></div><span class=\"ds-chip ds-live\">В ЭФИРЕ</span><span style=\"flex:1\"></span><button class=\"ds-bb ds-bb-sec\">Копировать лог</button><button class=\"ds-bb ds-bb-stop\">Остановить</button></div>",
+      "css": ".ds-head{display:flex;align-items:center;gap:16px;padding:16px 20px;border-radius:12px;background:rgba(138,90,43,.14);border:1px solid rgba(138,90,43,.4);color:#16181D;font-family:'Golos Text',sans-serif}.ds-head-title{font:700 34px/1.05 'PT Sans Narrow','PT Sans',sans-serif}.ds-head-sub{font-size:14px}.ds-chip{display:inline-block;padding:2px 10px;border-radius:9999px;font:700 12px 'Golos Text',sans-serif}.ds-live{background:#F2A900;color:#14171C;animation:ds-pulse 1.6s ease-in-out infinite}@keyframes ds-pulse{0%,100%{opacity:.65}50%{opacity:1}}.ds-bb{border:0;border-radius:8px;padding:6px 12px;font:600 14px 'Golos Text',sans-serif;cursor:pointer}.ds-bb-sec{background:#EDEEF0;color:#16181D}.ds-bb-stop{background:#EDEEF0;color:#D13438}.ds-bb:hover{opacity:.88}.ds-bb:focus-visible{outline:2px solid #16181D;outline-offset:2px}"
+    },
+    {
+      "name": "Кнопка на шапке, основная",
+      "kind": "button",
+      "refersTo": "band-button-primary",
+      "description": "Главное действие шапки: заливка краской, текст цвета фона.",
+      "html": "<button class=\"ds-bp\">Перезапустить</button>",
+      "css": ".ds-bp{background:#16181D;color:#F6F6F7;border:0;border-radius:8px;padding:6px 12px;font:600 14px 'Golos Text',sans-serif;cursor:pointer}.ds-bp:hover{opacity:.88}.ds-bp:focus-visible{outline:2px solid #16181D;outline-offset:2px}"
+    },
+    {
+      "name": "Кнопка «Остановить», взведённая",
+      "kind": "button",
+      "refersTo": "band-button-stop-armed",
+      "description": "Второе нажатие останавливает процесс; состояние держится 5 секунд.",
+      "html": "<button class=\"ds-armed\">Ещё раз — остановить</button>",
+      "css": ".ds-armed{background:#D13438;color:#FFFFFF;border:0;border-radius:8px;padding:6px 12px;font:600 14px 'Golos Text',sans-serif;cursor:pointer}.ds-armed:hover{opacity:.88}.ds-armed:focus-visible{outline:2px solid #16181D;outline-offset:2px}"
+    },
+    {
+      "name": "Кнопка-иконка",
+      "kind": "button",
+      "refersTo": "icon-button",
+      "description": "Второстепенное действие шапки; подпись — во всплывающей подсказке.",
+      "html": "<button class=\"ds-ib\" title=\"Открыть папку прогона\" aria-label=\"Открыть папку прогона\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/></svg></button>",
+      "css": ".ds-ib{display:inline-flex;padding:8px;border:0;border-radius:8px;background:#EDEEF0;color:#16181D;cursor:pointer}.ds-ib:hover{opacity:.88}.ds-ib:focus-visible{outline:2px solid #16181D;outline-offset:2px}"
+    },
+    {
+      "name": "Плашка статуса",
+      "kind": "chip",
+      "refersTo": "chip-live",
+      "description": "Пилюли статуса; «В ЭФИРЕ» мерцает.",
+      "html": "<span class=\"ds-st ds-st-live\">В ЭФИРЕ</span> <span class=\"ds-st ds-st-done\">ЗАВЕРШЁН</span> <span class=\"ds-st ds-st-err\">ОШИБКА</span> <span class=\"ds-st ds-st-stop\">ОСТАНОВЛЕН</span>",
+      "css": ".ds-st{display:inline-block;padding:2px 10px;border-radius:9999px;font:700 12px 'Golos Text',sans-serif}.ds-st-live{background:#F2A900;color:#14171C;animation:ds-pulse2 1.6s ease-in-out infinite}.ds-st-done{background:#1F8A5B;color:#FFFFFF}.ds-st-err{background:#D13438;color:#FFFFFF}.ds-st-stop{background:#5F6672;color:#F6F6F7}@keyframes ds-pulse2{0%,100%{opacity:.65}50%{opacity:1}}"
+    },
+    {
+      "name": "Рельс",
+      "kind": "nav",
+      "refersTo": "rail",
+      "description": "Нейтральный рельс 220px: пункты-пилюли, у выбранного зелёная иконка.",
+      "html": "<nav class=\"ds-rail\"><div class=\"ds-mark\">ML Studio</div><a class=\"ds-ri ds-sel\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"2\"/><path d=\"M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49\"/></svg>Трансляция · 1</a><a class=\"ds-ri\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2\"/></svg>Прогоны · 2</a></nav>",
+      "css": ".ds-rail{width:220px;background:#EFEFF1;border-right:1px solid #E3E4E8;color:#16181D;font:14px 'Golos Text',sans-serif;padding-bottom:12px}.ds-mark{font:700 28px/1.05 'PT Sans Narrow','PT Sans',sans-serif;padding:20px 20px 16px}.ds-ri{display:flex;align-items:center;gap:12px;margin:0 8px;padding:8px 12px;border-radius:8px;color:inherit;text-decoration:none;opacity:.72}.ds-ri:hover{opacity:1;background:#FFFFFF}.ds-ri.ds-sel{opacity:1;background:#FFFFFF;font-weight:600}.ds-ri.ds-sel svg{color:#1F8A5B}.ds-ri:focus-visible{outline:2px solid #16181D;outline-offset:-2px}"
+    },
+    {
+      "name": "Таблица тура с линией вылета",
+      "kind": "custom",
+      "refersTo": "table-row",
+      "description": "Карточка: строки по убыванию F1, черта вылета, круглые полосы длительности.",
+      "html": "<div class=\"ds-tbl\"><div class=\"ds-tr ds-th\"><span>#</span><span>F1</span><span>ВРЕМЯ</span><span class=\"ds-w\"></span></div><div class=\"ds-tr ds-win\"><span>1</span><span>0.7450</span><span>00:00:03</span><span class=\"ds-bar\"><i style=\"width:100%\"></i></span></div><div class=\"ds-tr ds-win ds-cur\"><span>2</span><span>0.6700</span><span>00:00:01</span><span class=\"ds-bar\"><i style=\"width:33%\"></i></span></div><div class=\"ds-line\"><b></b><em>ЛИНИЯ BASELINE + 0.05</em><b style=\"flex:0 0 16px\"></b></div><div class=\"ds-tr\"><span>3</span><span>0.6550</span><span>00:00:03</span><span class=\"ds-bar\"><i style=\"width:95%\"></i></span></div></div>",
+      "css": ".ds-tbl{background:#FFFFFF;border:1px solid #E3E4E8;border-radius:12px;overflow:hidden;color:#16181D;font:14px 'Golos Text',sans-serif;font-variant-numeric:tabular-nums;width:420px}.ds-tr{display:flex;align-items:center;gap:12px;padding:6px 16px;border-bottom:1px solid #E3E4E8}.ds-tr span{width:76px;text-align:right}.ds-tr span:first-child{width:24px;text-align:left;color:#5F6672}.ds-th{font-size:12px;font-weight:600;color:#5F6672}.ds-win{color:#1F8A5B;font-weight:600}.ds-cur{background:rgba(242,169,0,.18)}.ds-tr .ds-bar,.ds-tr .ds-w{width:56px;height:6px;border-radius:9999px;background:#E3E4E8;flex:none;overflow:hidden}.ds-th .ds-w{background:none}.ds-bar i{display:block;height:100%;border-radius:9999px;background:#5F6672}.ds-line{display:flex;align-items:center;gap:8px;padding:0 16px;color:#D13438;font:700 12px 'Golos Text',sans-serif}.ds-line b{flex:1;height:2px;background:#D13438}.ds-line em{font-style:normal}"
+    },
+    {
+      "name": "Строка счёта",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Карточка: F1 64px против линии вылета, отрыв со знаком.",
+      "html": "<div class=\"ds-score\"><div><div class=\"ds-cap\">F1 СЕЙЧАС</div><div class=\"ds-big\">0.6700</div></div><div class=\"ds-stats\"><div><span>Линия вылета</span><b>0.6640</b></div><div><span>Отрыв</span><b class=\"ds-pos\">+0.0060</b></div></div></div>",
+      "css": ".ds-score{display:flex;align-items:flex-end;gap:40px;padding:16px 20px;background:#FFFFFF;border:1px solid #E3E4E8;border-radius:12px;color:#16181D;font:14px 'Golos Text',sans-serif}.ds-cap{font-size:12px;font-weight:600;color:#5F6672}.ds-big{font:700 64px/1 'PT Sans Narrow','PT Sans',sans-serif;font-variant-numeric:tabular-nums}.ds-stats div{display:flex;gap:12px}.ds-stats span{width:120px;font-size:12px;color:#5F6672}.ds-stats b{font-weight:600;font-variant-numeric:tabular-nums}.ds-pos{color:#1F8A5B}"
+    },
+    {
+      "name": "Плашка класса",
+      "kind": "chip",
+      "refersTo": "class-ground",
+      "description": "Выбор класса в форме запуска: выбранная залита цветом класса.",
+      "html": "<button class=\"ds-cls ds-on\"><i></i>Грунт · ground</button> <button class=\"ds-cls\"><i style=\"background:#2867A8\"></i>Вода · water</button>",
+      "css": ".ds-cls{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid #E3E4E8;border-radius:8px;background:#FFFFFF;color:#16181D;font:14px 'Golos Text',sans-serif;cursor:pointer}.ds-cls i{width:10px;height:10px;border-radius:9999px;display:inline-block}.ds-on{background:#8A5A2B;border-color:#8A5A2B;color:#FFFFFF}.ds-on i{background:#FFFFFF}.ds-cls:focus-visible{outline:2px solid #16181D;outline-offset:2px}"
+    },
+    {
+      "name": "Лента событий",
+      "kind": "card",
+      "refersTo": "log-panel",
+      "description": "Лог PT Mono в карточке: эпохи жирно, ошибки красным.",
+      "html": "<div class=\"ds-log\"><div>12:00 INFO trial=1 epoch=1 batch 20/40 loss=0.29</div><div class=\"ds-ep\">12:00 INFO trial=1 epoch=1 F1=0.4750 best=0.4750</div><div class=\"ds-bad\">Traceback (most recent call last):</div></div>",
+      "css": ".ds-log{background:#FFFFFF;border:1px solid #E3E4E8;border-radius:12px;padding:12px;font:12px/18px 'PT Mono',monospace;color:#5F6672;white-space:nowrap}.ds-ep{color:#16181D;font-weight:700}.ds-bad{color:#D13438}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Турнирная таблица",
+    "overview": "**Creative North Star: \"Турнирная таблица\"**\n\nML Studio сделан как спортивная полоса. Каждый целевой класс — чемпионат, trial — тур, F1 — очки, baseline + 0.05 — линия вылета. Активный прогон занимает экран, как матч в прямом эфире: шапка с оттенком цвета класса, крупный счёт против линии, таблица тура с чертой вылета, лента событий. Метафора и её знаки остались прежними; подача обновлена в сторону спокойных инструментов вроде Linear и Raycast: холодные нейтрали, скруглённые карточки с рамкой 1px, пилюли навигации.\n\nМир по-прежнему отказывается от серой SaaS-панели с карточками метрик и от сетки панелей в духе W&B: карточки здесь — это шапка, счёт, график, лента и таблица одного матча, а не плитки показателей. Теней нет; иерархию держат тон поверхности, рамка, размер цифр и три сигнальных цвета. Движение — мерцание плашки «В ЭФИРЕ» и короткое проявление тела вкладки при переключении.\n\nОбе темы — один мир на холодных нейтралях: светлая — белые карточки на светло-сером фоне, тёмная — карточки чуть светлее почти чёрного фона. Приложение не подражает ни Windows, ни Linux.",
+    "keyCharacteristics": [
+      "Нейтральный рельс слева с пунктами-пилюлями; у выбранного пункта иконка зелёная.",
+      "Шапка прогона — скруглённая карточка с оттенком цвета класса (заливка 14%, рамка 40%).",
+      "Счёт F1 сжатым жирным шрифтом 64px с табличными цифрами.",
+      "Линия вылета — красная черта прямо в таблице и пунктир на графике.",
+      "Скруглённые карточки с рамкой 1px и без теней; ступень `raised` для кнопок, выделения и наведения.",
+      "Время и прогноз выровнены по правому краю, как на кассетном вкладыше."
+    ],
+    "rules": [
+      {
+        "name": "The Three Signals Rule",
+        "body": "Зелёный — выше линии и успех, янтарный — идёт сейчас, красный — ниже линии и ошибка. Других значений у них нет, и другие цвета эти смыслы не несут; зелёная иконка выбранного пункта рельса — единственное навигационное использование зелёного.",
+        "section": "colors"
+      },
+      {
+        "name": "The Class Tint Rule",
+        "body": "Цвет класса — оттенок шапки прогона (заливка 14%, рамка 40%, текст `ink`), сплошная заливка выбранной плашки класса (текст `band-white`) или круглый маркер. Без градиентов, без цвета класса в тексте.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Figures Rule",
+        "body": "Каждое число, которое меняется или сравнивается в столбце — счёт, статистика, таблицы, время в рельсе — набирается с `tnum`.",
+        "section": "typography"
+      },
+      {
+        "name": "The Label-on-Data Rule",
+        "body": "Прописная подпись 12px стоит только над числом, графиком, лентой, списком или командой, которые она называет. Над заголовком она не ставится.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tone-and-Border Rule",
+        "body": "Ничего не парит. Если блоку нужна отдельность — карточка на `surface` с рамкой 1px или ступень `raised`, не тень.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** тонировать шапку прогона цветом его класса (заливка 14%, рамка 40%) и писать на ней краской.",
+      "**Do** собирать экран из скруглённых карточек (`rounded.xl`) на `surface` с рамкой 1px.",
+      "**Do** показывать линию вылета в каждом месте, где F1 сравнивается с baseline: черта в таблице, пунктир на графике, «Отрыв» со знаком.",
+      "**Do** набирать изменяющиеся и столбцовые числа с `tnum` и выравнивать их вправо.",
+      "**Do** использовать встроенные PT Sans Narrow Bold, Golos Text и PT Mono; на Windows обращаться к display-семейству по имени «PT Sans».",
+      "**Do** выносить второстепенные действия шапки в кнопки-иконки с подсказкой.",
+      "**Do** ограничивать движение мерцанием «В ЭФИРЕ» и проявлением вкладки за 180 мс.",
+      "**Do** показывать длительность полосой, длина которой — точная доля от максимума."
+    ],
+    "donts": [
+      "**Don't** добавлять тени и градиенты к собственным элементам.",
+      "**Don't** использовать зелёный, янтарный и красный вне их смыслов (выше линии, в эфире, ниже линии/ошибка).",
+      "**Don't** собирать экран из серых карточек метрик или сетки панелей.",
+      "**Don't** ставить прописную подпись-«кикер» над заголовком.",
+      "**Don't** показывать выдуманные метрики: пустое состояние говорит, что данных ещё нет."
+    ]
+  }
+}

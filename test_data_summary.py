@@ -18,6 +18,26 @@ class RunAllTests(unittest.TestCase):
         self.assertEqual((args.patch_points, args.patches_per_scene), (1024, 3))
         self.assertEqual((args.loss, args.focal_gamma), ("focal", 1.5))
 
+    def test_child_command_forwards_pipeline_options(self):
+        parser = run_all.run_all_parser()
+        args = parser.parse_args(["--data", "train", "--final-data", "final", "--runs", "out",
+                                  "--patch-points", "1024", "--patches-per-scene", "3",
+                                  "--loss", "focal", "--focal-gamma", "1.5"])
+        command = run_all.child_hpo_args(args, Path("out/x"), "ground", "xyz", Path("train"), 2, 4)
+        pairs = dict(zip(command[1::2], command[2::2]))
+        self.assertEqual(pairs["--patch-points"], 1024)
+        self.assertEqual(pairs["--patches-per-scene"], 3)
+        self.assertEqual(pairs["--loss"], "focal")
+        self.assertEqual(pairs["--focal-gamma"], 1.5)
+
+    def test_final_params_are_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run.params.json"
+            path.write_text("old", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                run_all.write_final_params(path, {"lr": 0.1})
+            self.assertEqual(path.read_text(encoding="utf-8"), "old")
+
 
 class CompatibilityTests(unittest.TestCase):
     def setUp(self):
@@ -37,6 +57,20 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_missing_compatibility_metadata_is_incompatible(self):
         self.assertIn("отсутствуют", hpo.study_compatibility_error({}, self.info))
+
+    def test_same_data_dir_written_differently_is_compatible(self):
+        attrs = {"compatibility": hpo.compatibility_info(self.info)}
+        # Один и тот же каталог: относительное, с «./» и абсолютное написание.
+        absolute = str(Path(self.info["data_dir"]).resolve())
+        for spelling in (self.info["data_dir"], "./" + self.info["data_dir"], absolute):
+            with self.subTest(spelling=spelling):
+                self.assertIsNone(hpo.study_compatibility_error(
+                    attrs, self.info | {"data_dir": spelling}))
+
+    def test_other_data_dir_is_incompatible(self):
+        attrs = {"compatibility": hpo.compatibility_info(self.info)}
+        error = hpo.study_compatibility_error(attrs, self.info | {"data_dir": "exports_large"})
+        self.assertIn("data_dir", error)
 
 
 class DataSummaryTests(unittest.TestCase):

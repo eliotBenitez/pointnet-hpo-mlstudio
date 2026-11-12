@@ -33,7 +33,9 @@ The app is built around this project's actual artifacts: `scene_*.npy` datasets,
 
 - Datasets: list them and inspect per-scene point counts and sizes. Only `.npy` headers are read; the arrays are never loaded.
 - Runs: show the best metrics and parameters, a trials table, and F1 per epoch.
-- Launch: a single `hpo_pointnet.py` run or a `run_all.py` task script. All CLI arguments are editable, and a preview shows the exact command.
+- Launch: a single `hpo_pointnet.py` run or a `run_all.py` task script. All CLI arguments are editable, and a preview shows the exact command. Patch size (`--patch-points`), patches per scene, the runs directory and the final-data directory are separate fields; the runs list, reports, conflicts and the resume form all follow the selected runs directory.
+- Resume: opening a run restores its data, seed, epochs, patch settings, loss and its own runs directory and name, so "continue" targets the same study. Changed or missing (old artifact) run-defining values are reported in Russian; the Python engine blocks incompatible studies before touching artifacts (`workers` may change).
+- Final runs: a dedicated «Финальный прогон» button on a run with `best.json` parameters. It writes `<runs>/<name>.params.json`, launches one fixed-params trial into `final_<name>` with the final-data directory and final epochs, and refuses to overwrite existing params files or output directories.
 - Processes: several at once, with live stdout/stderr, stop (kills the whole process tree), restart, copy the log, and live F1 charts parsed from the log.
 - Prediction jobs (`predict_scene.py`: model testing and per-scene evaluation) get their own live screen: F1 of the last scene, scene and patch progress, and a table of scenes — not the trials-and-epochs match view, which would stay empty forever.
 - If the app is closed, it kills its running training processes rather than leaving them orphaned.

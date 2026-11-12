@@ -581,6 +581,11 @@ impl Studio {
             })
             .collect();
         let param_choice = SPACE.iter().map(|s| s.middle()).collect();
+        // Каталог результатов задаётся формой «Запуск». Стартовое сканирование — то же значение
+        // по умолчанию «runs», с которым создаётся поле; повторные сканирования (reload_runs)
+        // читают текущее значение поля.
+        let runs_dir = input("runs", "каталог результатов");
+        let runs = scan_runs(&root.join("runs"));
         let mut this = Self {
             projects: known,
             usage: monitor::latest(),
@@ -590,7 +595,7 @@ impl Studio {
             param_inputs,
             param_choice,
             params_note: None,
-            runs: scan_runs(&root.join("runs")),
+            runs,
             datasets,
             dark,
             sel_dataset: 0,
@@ -643,7 +648,7 @@ impl Studio {
             python: input(&python, "python"),
             data_dir: input(&data, "каталог с scene_*.npy"),
             final_data_dir: input("exports_final", "каталог для финальных прогонов"),
-            runs_dir: input("runs", "каталог результатов"),
+            runs_dir,
             out_name: input("", "по умолчанию <класс>_<признаки>"),
             trials: input("25", ""),
             epochs: input("10", ""),
@@ -858,13 +863,20 @@ impl Studio {
         };
     }
 
-    /// Пересканировать runs/ (и графики выбранного trial) в фоне — диск не блокирует окно.
+    /// Пересканировать каталог результатов из формы (и графики выбранного trial) в фоне —
+    /// диск не блокирует окно.
     fn reload_runs(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
             return;
         }
+        let field = self.runs_dir.read(cx).value().trim().to_string();
+        // Пустое поле не сканируем: root.join("") — это корень проекта, и его подкаталоги
+        // не должны выглядеть прогонами. Кнопка запуска требует непустой каталог.
+        if field.is_empty() {
+            return;
+        }
         self.scanning = true;
-        let dir = self.root.join("runs");
+        let dir = self.root.join(field);
         let name = self.runs.get(self.sel_run).map(|r| r.name.clone());
         let trial = self.sel_trial.clone();
         let (scan_name, scan_trial) = (name.clone(), trial.clone());
@@ -1038,18 +1050,13 @@ impl Studio {
                 "--data-dir".into(),
                 v(&self.data_dir),
             ]);
-            let runs = PathBuf::from(v(&self.runs_dir));
-            args.extend([
-                "--output-dir".into(),
-                runs.join(&name).to_string_lossy().into_owned(),
-            ]);
+            let runs = v(&self.runs_dir);
+            args.extend(["--output-dir".into(), cli_path(&runs, &name)]);
             args.extend(["--target", self.target, "--features", self.features].map(String::from));
             if self.custom {
                 args.extend([
                     "--fixed-params".into(),
-                    runs.join(format!("{name}.params.json"))
-                        .to_string_lossy()
-                        .into_owned(),
+                    cli_path(&runs, &format!("{name}.params.json")),
                 ]);
             }
         }
@@ -1287,10 +1294,19 @@ impl Studio {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let out = self
-            .root
-            .join("runs")
-            .join(&m.run)
+        // Предсказание пишется в каталог того прогона, из которого взята модель
+        // (поле «Каталог результатов» — только запасной вариант).
+        let base = self
+            .runs
+            .iter()
+            .find(|r| r.name == m.run)
+            .map(|r| r.path.clone())
+            .unwrap_or_else(|| {
+                self.root
+                    .join(self.runs_dir.read(cx).value().trim().to_string())
+                    .join(&m.run)
+            });
+        let out = base
             .join("pred")
             .join(format!("{stem}__trial{}.npy", m.trial));
         let job = PredJob {
@@ -1508,12 +1524,22 @@ impl Studio {
     fn delete_run(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(r) = self.runs.get(idx) else { return };
         let name = r.name.clone();
-        if let Some(c) = self.conflict(Some(&format!("runs/{name}"))) {
+        // Конфликт — по фактическому каталогу прогона (может лежать вне «runs» по умолчанию).
+        let run_dir = r
+            .path
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| r.path.to_string_lossy().replace('\\', "/"));
+        if let Some(c) = self.conflict(Some(&run_dir)) {
             self.delete_error = Some(format!("Нельзя удалить {name}: {c}"));
             return;
         }
-        let params = self.root.join("runs").join(format!("{name}.params.json"));
-        let targets: Vec<PathBuf> = [Some(r.path.clone()), params.exists().then_some(params)]
+        // params-файл лежит рядом с каталогом прогона — его создают финальный прогон и повтор.
+        let params = r
+            .path
+            .parent()
+            .map(|p| p.join(format!("{name}.params.json")));
+        let targets: Vec<PathBuf> = [Some(r.path.clone()), params.filter(|p| p.exists())]
             .into_iter()
             .flatten()
             .collect();
@@ -1543,19 +1569,30 @@ impl Studio {
             self.tab_error = Some("У прогона нет best.json — финальный прогон невозможен.".into());
             return;
         };
+        if best.get("params").map_or(true, |p| !p.is_object()) {
+            self.tab_error = Some(
+                "В best.json нет параметров лучшего trial — финальный прогон невозможен.".into(),
+            );
+            return;
+        }
         let final_data = self.final_data_dir.read(cx).value().trim().to_string();
         if final_data.is_empty() || !self.root.join(&final_data).is_dir() {
             self.tab_error =
                 Some("Выберите существующий каталог данных для финального прогона.".into());
             return;
         }
-        let target = run.target().unwrap_or_default();
-        let features = run.features().unwrap_or_else(|| "xyz".into());
-        let runs_dir = PathBuf::from(self.runs_dir.read(cx).value().trim());
-        let params_path = runs_dir.join(format!("{}.params.json", run.name));
-        let output = runs_dir.join(format!("final_{}", run.name));
-        if self.conflict(Some(&output.to_string_lossy())).is_some()
-            || self.root.join(&output).join("study.db").exists()
+        let epochs = self.final_epochs.read(cx).value().trim().to_string();
+        let workers = self.workers.read(cx).value().trim().to_string();
+        let runs_field = self.runs_dir.read(cx).value().trim().to_string();
+        let params_path = cli_path(&runs_field, &format!("{}.params.json", run.name));
+        let output = cli_path(&runs_field, &format!("final_{}", run.name));
+        let title = format!("final_{}", run.name);
+        // Все проверки — до записи params-файла: неудачная попытка не оставляет артефакт,
+        // который заблокирует повтор (файл намеренно не перезаписывается).
+        // Каталог проверяется целиком (как в run_all.py): даже без study.db он занят.
+        if self.jobs.iter().any(|j| j.running() && j.title == title)
+            || self.conflict(Some(&output)).is_some()
+            || self.root.join(&output).exists()
         {
             self.tab_error = Some(format!(
                 "Финальный прогон final_{} уже занят или существует. Выберите новый каталог результатов.",
@@ -1567,6 +1604,17 @@ impl Studio {
             .get("params")
             .cloned()
             .unwrap_or(serde_json::Value::Object(Default::default()));
+        // Python проверяется до записи params-файла: неудачный spawn не оставит артефакт,
+        // который заблокирует повтор (файл намеренно не перезаписывается).
+        let program = self.python.read(cx).value().trim().to_string();
+        if program.is_empty()
+            || ((program.contains('/') || program.contains('\\')) && !Path::new(&program).exists())
+        {
+            self.tab_error = Some(
+                "Проверьте путь к Python на вкладке «Запуск» — финальный прогон не запущен.".into(),
+            );
+            return;
+        }
         let params_on_disk = self.root.join(&params_path);
         if params_on_disk.exists() {
             self.tab_error = Some(format!(
@@ -1588,55 +1636,17 @@ impl Studio {
             self.tab_error = Some(format!("Не удалось записать параметры финала: {e}"));
             return;
         }
-        let value = |key: &str, default: &str| {
-            best.get(key).map_or_else(
-                || default.into(),
-                |v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    v => v.to_string().trim_matches('"').to_string(),
-                },
-            )
-        };
-        let mut args = vec![
-            "-u".into(),
-            "hpo_pointnet.py".into(),
-            "--data-dir".into(),
-            final_data,
-            "--output-dir".into(),
-            output.to_string_lossy().into_owned(),
-            "--target".into(),
-            target,
-            "--features".into(),
-            features,
-            "--fixed-params".into(),
-            params_path.to_string_lossy().into_owned(),
-            "--n-trials".into(),
-            "1".into(),
-            "--epochs".into(),
-            self.final_epochs.read(cx).value().trim().into(),
-            "--seed".into(),
-            value("seed", "42"),
-            "--patch-points".into(),
-            value("patch_points", "16384"),
-            "--patches-per-scene".into(),
-            value("patches_per_scene", "2"),
-            "--workers".into(),
-            self.workers.read(cx).value().trim().into(),
-        ];
-        if run.loss().starts_with("focal") {
-            args.extend([
-                "--loss".into(),
-                "focal".into(),
-                "--focal-gamma".into(),
-                run.loss()
-                    .strip_prefix("focal(gamma=")
-                    .and_then(|s| s.strip_suffix(')'))
-                    .unwrap_or("2")
-                    .into(),
-            ]);
-        }
-        let title = format!("final_{}", run.name);
-        let program = self.python.read(cx).value().trim().to_string();
+        let args = final_run_args(
+            best,
+            &run.loss(),
+            &run.target().unwrap_or_default(),
+            &run.features().unwrap_or_else(|| "xyz".into()),
+            &final_data,
+            &output,
+            &params_path,
+            &epochs,
+            &workers,
+        );
         self.spawn(program, args, title);
         cx.notify();
     }
@@ -1678,6 +1688,17 @@ impl Studio {
         if let Some(f) = features.and_then(|f| FEATURES.iter().find(|x| **x == f)) {
             self.features = f;
         }
+        // Продолжение пишется в тот же каталог и под тем же именем: иначе --output-dir укажет
+        // на другой study, и «продолжение» молча создаст новый.
+        if let Some(d) = r
+            .path
+            .parent()
+            .and_then(|p| p.strip_prefix(&self.root).ok())
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+        {
+            Self::set_input(&self.runs_dir, d, window, cx);
+        }
+        Self::set_input(&self.out_name, name.clone(), window, cx);
         // Продолжение study: --data-dir обязателен, а другие данные, seed или бюджет trial делают
         // trials несравнимыми (hpo_pointnet.py сверяет только версию пространства и loss).
         let (data_dir, seed_input, epochs_input) = (
@@ -1691,10 +1712,10 @@ impl Studio {
         let mut missing: Option<String> = None;
         for (label, want, input) in [
             ("данные", data, &data_dir),
-            ("seed", seed, &seed_input),
-            ("эпохи на trial", epochs, &epochs_input),
-            ("точки в патче", patch_points, &points_input),
-            ("патчи на сцену", patches_per_scene, &patches_input),
+            ("seed", seed.clone(), &seed_input),
+            ("эпохи на trial", epochs.clone(), &epochs_input),
+            ("точки в патче", patch_points.clone(), &points_input),
+            ("патчи на сцену", patches_per_scene.clone(), &patches_input),
         ] {
             let Some(v) =
                 want.filter(|v| !v.is_empty() && v.as_str() != input.read(cx).value().trim())
@@ -1719,6 +1740,11 @@ impl Studio {
                 "Каталог прогона {p} на этой машине недоступен — выберите данные вручную."
             ));
         }
+        for (label, value) in [("seed", seed), ("эпохи на trial", epochs), ("точки в патче", patch_points), ("патчи на сцену", patches_per_scene)] {
+            if value.is_none() {
+                note.push(format!("В старом артефакте не записан параметр «{label}» — продолжение в прежнем study заблокировано."));
+            }
+        }
         self.params_note = (!note.is_empty()).then(|| note.join(" "));
         self.run_all = false;
     }
@@ -1726,26 +1752,28 @@ impl Studio {
     /// Почему нельзя запускать в `out_dir` (None — сценарий run_all): туда уже пишет идущий процесс.
     fn conflict(&self, out_dir: Option<&str>) -> Option<String> {
         self.jobs.iter().filter(|j| j.running()).find_map(|j| {
-            // Прогон — это каталог runs/<имя> целиком: в него пишут и предсказания (runs/<имя>/pred),
-            // поэтому удалять прогон, пока считается оценка по сценам, нельзя.
-            let run_of = |p: &Path| {
-                let rel = p.strip_prefix(&self.root).unwrap_or(p);
-                let mut it = rel.iter();
-                (it.next()?.to_str()? == "runs").then(|| it.next()?.to_str().map(|n| format!("runs/{n}"))).flatten()
-            };
-            // У обучения каталог задаёт --output-dir, у predict_scene.py — --out-dir или сам файл предсказания.
-            let dirs: Vec<PathBuf> = j
+            // У обучения каталог задаёт --output-dir (любой глубины, сравнивается как есть),
+            // у predict_scene.py — --out-dir/--out или сам файл предсказания (поднимаем до прогона).
+            let mut busy: Vec<String> = j
                 .predict
                 .iter()
-                .map(|p| p.out.clone())
-                .chain(["--output-dir", "--out-dir"].into_iter().filter_map(|k| Job::arg(&j.args, k)).map(PathBuf::from))
+                .map(|p| pred_run_path(&self.root, &p.out))
                 .collect();
-            let busy: Vec<String> = if dirs.is_empty() {
-                vec![format!("runs/{}", j.run)]
-            } else {
-                // Каталог вне runs/ (например tests/…) сверяется как есть — так же, как раньше.
-                dirs.iter().map(|d| run_of(d).unwrap_or_else(|| d.to_string_lossy().into_owned())).collect()
-            };
+            for k in ["--output-dir"] {
+                if let Some(a) = Job::arg(&j.args, k) {
+                    busy.push(norm_path(&self.root, &PathBuf::from(a)));
+                }
+            }
+            for k in ["--out-dir", "--out"] {
+                if let Some(a) = Job::arg(&j.args, k) {
+                    busy.push(pred_run_path(&self.root, &PathBuf::from(a)));
+                }
+            }
+            if busy.is_empty() {
+                // run_all.py пишет в <runs>/<текущий прогон>: каталог берём из его аргументов.
+                let runs = Job::arg(&j.args, "--runs").map_or_else(|| "runs".into(), |s| s.replace('\\', "/"));
+                busy.push(format!("{}/{}", runs.trim_end_matches('/'), j.run));
+            }
             match out_dir {
                 None => Some(format!("Идёт «{}» — run_all может писать в тот же прогон. Дождитесь окончания или остановите его.", j.title)),
                 Some(d) if busy.iter().any(|b| b == d) || j.args.iter().any(|a| a == "run_all.py") => {
@@ -1795,6 +1823,16 @@ impl Studio {
         };
         let mut args: Vec<String> =
             serde_json::from_value(last["args"].clone()).unwrap_or_default();
+        // Повтор лежит рядом с исходным прогоном — в его каталоге результатов.
+        let dir = r
+            .path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.root.join("runs"));
+        let dir_str = dir
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| dir.to_string_lossy().replace('\\', "/"));
         let name = (1..)
             .map(|n| {
                 if n == 1 {
@@ -1803,16 +1841,16 @@ impl Studio {
                     format!("{}_repeat{n}", r.name)
                 }
             })
-            .find(|n| !self.root.join("runs").join(n).exists())
+            .find(|n| !dir.join(n).exists())
             .unwrap();
-        let out_dir = format!("runs/{name}");
+        let out_dir = cli_path(&dir_str, &name);
         if let Some(e) = self.conflict(Some(&out_dir)) {
             self.tab_error = Some(e);
             return;
         }
         set_arg(&mut args, "--output-dir", out_dir);
         if !last["fixed_params"].is_null() {
-            let f = format!("runs/{name}.params.json");
+            let f = cli_path(&dir_str, &format!("{name}.params.json"));
             if let Err(e) = std::fs::write(
                 self.root.join(&f),
                 serde_json::to_vec_pretty(&last["fixed_params"]).unwrap(),
@@ -3676,7 +3714,7 @@ impl Studio {
                             .icon(Icon::new(Lucide::RefreshCw))
                             .ghost()
                             .xsmall()
-                            .tooltip("Перечитать runs/")
+                            .tooltip("Перечитать каталог результатов из формы «Запуск»")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.reload_runs(cx);
                                 cx.notify();
@@ -3784,7 +3822,9 @@ impl Studio {
             .when(self.runs.is_empty(), |d| {
                 d.child(div().px_4().py_2().text_color(p.muted).child(format!(
                     "В {} пока пусто. Результаты появятся после первого trial.",
-                    self.root.join("runs").display()
+                    self.root
+                        .join(self.runs_dir.read(cx).value().trim())
+                        .display()
                 )))
             });
 
@@ -4439,6 +4479,9 @@ impl Studio {
         let params_file = Job::arg(&args, "--fixed-params").map(|p| self.root.join(p));
         // --fixed-params ставится первым trial только в пустой study (hpo_pointnet.py).
         let final_data = self.final_data_dir.read(cx).value().trim().to_string();
+        let data = self.data_dir.read(cx).value().trim().to_string();
+        let gamma = self.focal_gamma.read(cx).value().trim().to_string();
+        let gamma_valid = self.loss != "focal" || gamma.parse::<f64>().is_ok_and(|g| g > 0.);
         let patch_valid = [&self.patch_points, &self.patches_per_scene]
             .iter()
             .all(|i| {
@@ -4455,8 +4498,23 @@ impl Studio {
             Some("Выберите существующий каталог данных для финального прогона.".into())
         } else if self.runs_dir.read(cx).value().trim().is_empty() {
             Some("Укажите каталог результатов.".into())
+        } else if data.is_empty() || !self.root.join(&data).is_dir() {
+            Some("Выберите существующий каталог данных.".into())
         } else if !patch_valid {
             Some("Число точек в патче и патчей на сцену должно быть положительным.".into())
+        } else if !gamma_valid {
+            Some("Gamma для Focal Loss должна быть положительным числом.".into())
+        } else if [&self.trials, &self.epochs, &self.final_epochs]
+            .iter()
+            .any(|i| {
+                !i.read(cx)
+                    .value()
+                    .trim()
+                    .parse::<usize>()
+                    .is_ok_and(|n| n > 0)
+            })
+        {
+            Some("Число trials и эпох должно быть положительным целым.".into())
         } else if let Some(c) = self.conflict((!run_all).then_some(out_dir.as_str())) {
             Some(c)
         } else if custom && self.space_error.is_some() {
@@ -4640,7 +4698,7 @@ impl Studio {
                             .child(hyper)
                             .child(section("Прогон"))
                             .child(field("Имя прогона", &self.out_name))
-                            .child(div().text_xs().text_color(p.muted).child("Результаты пишутся в runs/<имя>. С тем же именем подбор продолжится из study.db."))
+                            .child(div().text_xs().text_color(p.muted).child("Результаты пишутся в <каталог результатов>/<имя>. С тем же именем подбор продолжится из study.db."))
                     })
                     .when(run_all, |d| {
                         d.child(section("Задачи"))
@@ -5807,10 +5865,15 @@ impl Studio {
     }
 
     /// Шаг №7: сводный отчёт по всем прогонам, как в run_all.py.
-    fn add_report_step(&mut self) {
-        let args = ["-u", "summary_report.py", "runs", "--out", "runs/report.md"]
-            .map(String::from)
-            .to_vec();
+    fn add_report_step(&mut self, cx: &App) {
+        let runs = self.runs_dir.read(cx).value().trim().to_string();
+        let args = vec![
+            "-u".to_string(),
+            "summary_report.py".into(),
+            runs,
+            "--out".into(),
+            cli_path(&self.runs_dir.read(cx).value().trim(), "report.md"),
+        ];
         self.add_step(scenario::Step {
             title: "Сводный отчёт".into(),
             args,
@@ -6282,7 +6345,7 @@ impl Studio {
                     .disabled(this_live)
                     .tooltip("Сводный отчёт по всем прогонам (№7)")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_report_step();
+                        this.add_report_step(cx);
                         cx.notify();
                     })),
             )
@@ -7716,6 +7779,107 @@ fn set_arg(args: &mut Vec<String>, key: &str, value: String) {
     }
 }
 
+/// Путь аргумента CLI `<dir>/<name>`: единые прямые слэши — так пути сравнивает conflict()
+/// и показывает лог; обратные слэши Windows нормализуются.
+fn cli_path(dir: &str, name: &str) -> String {
+    let dir = dir.trim().trim_end_matches(['/', '\\']).replace('\\', "/");
+    if dir.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// Путь для сравнения в conflict(): относительно корня проекта с прямыми слэшами
+/// (кли_path строит аргументы так же), поэтому абсолютное и относительное написание
+/// одного каталога совпадают; вне корня — путь целиком с прямыми слэшами.
+fn norm_path(root: &Path, p: &Path) -> String {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
+    abs.strip_prefix(root)
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| abs.to_string_lossy().replace('\\', "/"))
+}
+
+/// Прогон — каталог целиком: в него пишут и предсказания (<прогон>/pred/…), поэтому путь
+/// предсказания поднимается до каталога прогона. Работает для прогона любой глубины
+/// (runs/x, out/deep/x, вне корня проекта); пути без pred/ не меняются.
+fn pred_run_path(root: &Path, p: &Path) -> String {
+    let n = norm_path(root, p);
+    if let Some((run, _)) = n.rsplit_once("/pred/") {
+        run.to_string()
+    } else {
+        n.strip_suffix("/pred").unwrap_or(&n).to_string()
+    }
+}
+
+/// Число или строка из JSON-артефакта — в строку аргумента CLI; пусто/не скаляр — умолчание.
+fn json_scalar_str(v: Option<&serde_json::Value>, default: &str) -> String {
+    match v {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(v) if v.is_number() => v.to_string(),
+        _ => default.to_string(),
+    }
+}
+
+/// Аргументы финального прогона: параметры лучшего trial из best.json, один trial,
+/// --fixed-params и каталог final_<имя>. Эпохи/воркеры — из формы.
+fn final_run_args(
+    best: &serde_json::Value,
+    loss: &str,
+    target: &str,
+    features: &str,
+    final_data: &str,
+    output: &str,
+    params_path: &str,
+    epochs: &str,
+    workers: &str,
+) -> Vec<String> {
+    let field = |k: &str, d: &str| json_scalar_str(best.get(k), d);
+    let mut args = vec![
+        "-u".into(),
+        "hpo_pointnet.py".into(),
+        "--data-dir".into(),
+        final_data.to_string(),
+        "--output-dir".into(),
+        output.to_string(),
+        "--target".into(),
+        target.to_string(),
+        "--features".into(),
+        features.to_string(),
+        "--fixed-params".into(),
+        params_path.to_string(),
+        "--n-trials".into(),
+        "1".into(),
+        "--epochs".into(),
+        epochs.to_string(),
+        "--seed".into(),
+        field("seed", "42"),
+        "--patch-points".into(),
+        field("patch_points", "16384"),
+        "--patches-per-scene".into(),
+        field("patches_per_scene", "2"),
+        "--workers".into(),
+        workers.to_string(),
+    ];
+    if loss.starts_with("focal") {
+        let gamma = loss
+            .strip_prefix("focal(gamma=")
+            .and_then(|g| g.strip_suffix(')'))
+            .unwrap_or("2");
+        args.extend([
+            "--loss".into(),
+            "focal".into(),
+            "--focal-gamma".into(),
+            gamma.to_string(),
+        ]);
+    }
+    args
+}
+
 /// Путь с разделителями текущей ОС (аргумент запуска мог прийти с «/»).
 fn show_path(p: &Path) -> String {
     let s = p.display().to_string();
@@ -7957,6 +8121,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     /// Лог процесса растёт часами: в памяти держится только хвост, на диск пишется всё.
     #[test]
     fn output_keeps_tail_only() {
@@ -8000,6 +8166,121 @@ mod tests {
         assert_eq!(super::auto_name(&a), "ground_xyz_focal_g0.5");
         super::set_arg(&mut a, "--loss", "ce".into());
         assert_eq!(super::auto_name(&a), "ground_xyz");
+    }
+
+    /// Пути в аргументах CLI — с прямыми слэшами: так их сравнивает conflict() и показывает лог.
+    #[test]
+    fn cli_path_normalizes_separators() {
+        assert_eq!(super::cli_path("runs", "ground_xyz"), "runs/ground_xyz");
+        assert_eq!(super::cli_path("runs/", "ground_xyz"), "runs/ground_xyz");
+        assert_eq!(super::cli_path("runs\\", "ground_xyz"), "runs/ground_xyz");
+        assert_eq!(
+            super::cli_path("D:\\TEMP\\smoke", "final_x"),
+            "D:/TEMP/smoke/final_x"
+        );
+        assert_eq!(super::cli_path("", "x"), "x");
+    }
+
+    /// Числовые поля best.json читаются как числа, отсутствующие — значение по умолчанию.
+    #[test]
+    fn json_scalar_str_numbers_and_defaults() {
+        let v = serde_json::json!({"seed": 42, "loss": "ce"});
+        assert_eq!(
+            super::json_scalar_str(v.get("seed"), "7"),
+            "42"
+        );
+        assert_eq!(super::json_scalar_str(v.get("loss"), "x"), "ce");
+        assert_eq!(super::json_scalar_str(v.get("patch_points"), "16384"), "16384");
+        assert_eq!(super::json_scalar_str(None, "2"), "2");
+    }
+
+    /// Команда финального прогона: один trial, --fixed-params, final_<имя>, параметры из best.json.
+    #[test]
+    fn final_run_args_from_best_json() {
+        let best = serde_json::json!({
+            "seed": 42, "patch_points": 1024, "patches_per_scene": 3, "params": {"lr": 0.01}
+        });
+        let args = super::final_run_args(
+            &best, "ce", "ground", "xyz", "exports_final",
+            "runs/final_ground_xyz", "runs/ground_xyz.params.json", "30", "2",
+        );
+        let get = |k: &str| {
+            args.iter().position(|a| a == k).map(|i| args[i + 1].clone()).unwrap()
+        };
+        assert_eq!(get("-u"), "hpo_pointnet.py");
+        assert_eq!(get("--data-dir"), "exports_final");
+        assert_eq!(get("--output-dir"), "runs/final_ground_xyz");
+        assert_eq!(get("--target"), "ground");
+        assert_eq!(get("--features"), "xyz");
+        assert_eq!(get("--fixed-params"), "runs/ground_xyz.params.json");
+        assert_eq!(get("--n-trials"), "1");
+        assert_eq!(get("--epochs"), "30");
+        assert_eq!(get("--seed"), "42");
+        assert_eq!(get("--patch-points"), "1024");
+        assert_eq!(get("--patches-per-scene"), "3");
+        assert_eq!(get("--workers"), "2");
+        assert!(!args.iter().any(|a| a == "--loss"));
+    }
+
+    /// Пути предсказаний поднимаются к каталогу прогона — с любым числом компонент
+    /// и вне корня проекта; --output-dir сравнивается как есть.
+    #[test]
+    fn conflict_paths_match_at_any_depth() {
+        let root = Path::new(if cfg!(windows) { "D:/proj" } else { "/proj" });
+        // Обучение: каталог любой глубины, относительное и абсолютное написание.
+        assert_eq!(super::norm_path(root, &PathBuf::from("out/deep/x")), "out/deep/x");
+        assert_eq!(
+            super::norm_path(root, &root.join("out").join("deep").join("x")),
+            "out/deep/x"
+        );
+        // Предсказания того же прогона: файл в <прогон>/pred и каталог <прогон>/pred.
+        assert_eq!(
+            super::pred_run_path(root, &root.join("out/deep/x/pred/scene1__trial0.npy")),
+            "out/deep/x"
+        );
+        assert_eq!(
+            super::pred_run_path(root, &root.join("out/deep/x").join("pred")),
+            "out/deep/x"
+        );
+        // Относительное написание пути предсказания — тот же прогон (разделители Windows).
+        #[cfg(windows)]
+        assert_eq!(
+            super::pred_run_path(root, &PathBuf::from("out/deep/x\\pred\\s.npy")),
+            "out/deep/x"
+        );
+        // Вне корня проекта: путь целиком, предсказание тоже поднимается к прогону.
+        let outside = if cfg!(windows) { "D:/TEMP" } else { "/tmp" };
+        assert_eq!(
+            super::norm_path(root, &PathBuf::from(format!("{outside}/smoke/x"))),
+            format!("{outside}/smoke/x")
+        );
+        assert_eq!(
+            super::pred_run_path(root, &PathBuf::from(format!("{outside}/smoke/x/pred/s.npy"))),
+            format!("{outside}/smoke/x")
+        );
+        // Тест моделей пишет вне прогонов — путь не поднимается.
+        assert_eq!(
+            super::pred_run_path(root, &root.join("tests").join("m__d")),
+            "tests/m__d"
+        );
+    }
+
+    /// Focal-прогон сохраняет gamma из строки loss; отсутствующие поля — по умолчанию.
+    #[test]
+    fn final_run_args_focal_gamma_and_defaults() {
+        let best = serde_json::json!({"params": {}});
+        let args = super::final_run_args(
+            &best, "focal(gamma=1.5)", "noise", "xyz_hag", "fin",
+            "out/final_noise", "out/noise.params.json", "5", "0",
+        );
+        let get = |k: &str| {
+            args.iter().position(|a| a == k).map(|i| args[i + 1].clone()).unwrap()
+        };
+        assert_eq!(get("--loss"), "focal");
+        assert_eq!(get("--focal-gamma"), "1.5");
+        assert_eq!(get("--seed"), "42");
+        assert_eq!(get("--patch-points"), "16384");
+        assert_eq!(get("--patches-per-scene"), "2");
     }
 
     #[test]

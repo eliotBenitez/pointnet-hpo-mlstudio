@@ -34,7 +34,8 @@ def run_all_parser():
                          "прогоны (для выбранных 2–6, а если их нет — для всех, где есть best.json)")
     ap.add_argument("--data", type=Path, default=ROOT / "exports")
     ap.add_argument("--final-data", type=Path, default=ROOT / "exports_final",
-                    help="«Ссылка 2»; если папки нет — финальные прогоны пропускаются")
+                    help="каталог данных для финальных прогонов (задача final); должен существовать — "
+                         "иначе сценарий останавливается с ошибкой")
     ap.add_argument("--runs", type=Path, default=ROOT / "runs")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--n-trials", type=int, default=25)   # ТЗ: 20–30
@@ -46,6 +47,21 @@ def run_all_parser():
     ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
     ap.add_argument("--focal-gamma", type=float, default=2.0)
     return ap
+
+
+def child_hpo_args(args, output_dir, target, features, data, n_trials, epochs, *extra):
+    return [ROOT / "hpo_pointnet.py", "--data-dir", data, "--output-dir", output_dir,
+            "--target", target, "--features", features, "--seed", args.seed,
+            "--n-trials", n_trials, "--epochs", epochs, "--workers", args.workers,
+            "--patch-points", args.patch_points, "--patches-per-scene", args.patches_per_scene,
+            "--loss", args.loss, "--focal-gamma", args.focal_gamma, *extra]
+
+
+def write_final_params(params_path, params):
+    if params_path.exists():
+        raise SystemExit(f"Файл параметров финала уже существует: {params_path}; перезапись запрещена")
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.write_text(json.dumps(params, ensure_ascii=False), encoding="utf-8")
 
 
 def main():
@@ -65,6 +81,11 @@ def main():
             log.write(text + "\n")
             log.flush()
 
+        # До запуска детей: битый --final-data не должен портить прогоны; ошибка — и в лог, и на экран.
+        if "final" in args.tasks and not args.final_data.is_dir():
+            say(f"=== ОШИБКА: выберите существующий каталог данных для финального прогона: {args.final_data}")
+            sys.exit(1)
+
         def sh(*cmd):
             # Строки процесса сразу на экран и в лог; падение останавливает весь сценарий.
             proc = subprocess.Popen([sys.executable, "-u", *map(str, cmd)], cwd=ROOT, env=env,
@@ -82,11 +103,7 @@ def main():
         def run(name, target, features, data, n_trials, epochs, *extra):
             started = time.time()
             say(f"\n=== {time.strftime('%T')} {name} ({target}, {features})")
-            sh(ROOT / "hpo_pointnet.py", "--data-dir", data, "--output-dir", args.runs / name,
-               "--target", target, "--features", features, "--seed", args.seed,
-               "--n-trials", n_trials, "--epochs", epochs, "--workers", args.workers,
-               "--patch-points", args.patch_points, "--patches-per-scene", args.patches_per_scene,
-               "--loss", args.loss, "--focal-gamma", args.focal_gamma, *extra)
+            sh(*child_hpo_args(args, args.runs / name, target, features, data, n_trials, epochs, *extra))
             say(f"=== {time.strftime('%T')} {name} за {since(started)}")
 
         total = time.time()
@@ -97,19 +114,25 @@ def main():
             run(name, target, features, args.data, args.n_trials, args.epochs)
 
         if "final" in args.tasks:
-            if not args.final_data.is_dir():
-                say(f"=== папки {args.final_data} нет — финальные прогоны пропущены")
-            else:
-                for _, name, _, _ in selected or [(t, n + tag, *r) for t, n, *r in RUNS_PLAN]:
-                    best_path = args.runs / name / "best.json"
-                    if not best_path.exists():
-                        say(f"=== {name}: нет {best_path} — сначала подбор, финальный прогон пропущен")
-                        continue
-                    best = json.loads(best_path.read_text(encoding="utf-8"))
-                    params = args.runs / f"{name}.params.json"
-                    params.write_text(json.dumps(best["params"]), encoding="utf-8")
-                    run(f"final_{name}", best["target"], best["features"], args.final_data,
-                        1, args.final_epochs, "--fixed-params", params)
+            for _, name, _, _ in selected or [(t, n + tag, *r) for t, n, *r in RUNS_PLAN]:
+                best_path = args.runs / name / "best.json"
+                if not best_path.exists():
+                    say(f"=== {name}: нет {best_path} — сначала подбор, финальный прогон пропущен")
+                    continue
+                best = json.loads(best_path.read_text(encoding="utf-8"))
+                params = args.runs / f"{name}.params.json"
+                output = args.runs / f"final_{name}"
+                # Проверки — до записи params-файла: неудачная попытка не оставляет артефакт,
+                # который заблокирует повтор (файл намеренно не перезаписывается).
+                if output.exists():
+                    say(f"=== ОШИБКА: каталог финального прогона уже существует: {output}; перезапись запрещена")
+                    sys.exit(1)
+                if params.exists():
+                    say(f"=== ОШИБКА: файл параметров финала уже существует: {params}; перезапись запрещена")
+                    sys.exit(1)
+                write_final_params(params, best["params"])
+                run(f"final_{name}", best["target"], best["features"], args.final_data,
+                    1, args.final_epochs, "--fixed-params", params)
 
         if "7" in args.tasks:
             say(f"\n=== {time.strftime('%T')} сводный отчёт (№7)")

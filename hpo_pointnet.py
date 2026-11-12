@@ -580,11 +580,23 @@ def study_compatibility_error(study_attrs, run_info):
             actual = None
     if not isinstance(actual, dict):
         return "у study отсутствуют параметры совместимости; укажите новую --output-dir"
-    differences = [key for key in COMPATIBILITY_FIELDS if actual.get(key) != expected.get(key)]
+    differences = [key for key in COMPATIBILITY_FIELDS
+                   if not compat_value_matches(key, actual.get(key), expected.get(key))]
     if differences:
         changed = ", ".join(differences)
         return f"у study отличаются параметры совместимости: {changed}; укажите новую --output-dir"
     return None
+
+
+def compat_value_matches(key, stored, requested):
+    """Совпадение значения параметра совместимости.
+
+    data_dir допускает разные написания одного каталога (относительное, с «./», абсолютное):
+    сравниваем разрешённые абсолютные пути, чтобы продолжение не блокировалось ложно.
+    """
+    if key == "data_dir" and isinstance(stored, str) and isinstance(requested, str):
+        return Path(stored).resolve() == Path(requested).resolve()
+    return stored == requested
 
 
 def main(argv=None):
@@ -623,7 +635,15 @@ def main(argv=None):
     seed_everything(args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if (args.output_dir / "study.db").exists():
-        existing = optuna.load_study(study_name="pointnet_binary", storage=f"sqlite:///{(args.output_dir / 'study.db').as_posix()}")
+        # Битый или занятый study.db — понятная ошибка до записи каких-либо артефактов.
+        try:
+            existing = optuna.load_study(study_name="pointnet_binary",
+                                         storage=f"sqlite:///{(args.output_dir / 'study.db').as_posix()}")
+        except SystemExit:
+            raise
+        except Exception as exc:
+            raise SystemExit(f"{args.output_dir / 'study.db'} не удалось прочитать "
+                             f"({type(exc).__name__}: {exc}); укажите новую --output-dir") from exc
         if existing.trials:
             requested = dict(data_dir=str(args.data_dir), seed=args.seed, epochs=args.epochs,
                              target=args.target, features=args.features, patch_points=args.patch_points,

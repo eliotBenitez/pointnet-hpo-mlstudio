@@ -27,7 +27,7 @@ RUNS_PLAN = [  # (задача, имя, target, features)
 TASKS = ["2", "3", "4", "5", "6", "7", "final"]
 
 
-def main():
+def run_all_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", nargs="+", choices=TASKS, default=TASKS,
                     help="какие задачи выполнить: 2–6 подбор по классам, 7 отчёт, final финальные "
@@ -41,9 +41,17 @@ def main():
     ap.add_argument("--epochs", type=int, default=10)     # ТЗ: 8–10
     ap.add_argument("--final-epochs", type=int, default=30)
     ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--patch-points", type=int, default=16384)
+    ap.add_argument("--patches-per-scene", type=int, default=2)
     ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
     ap.add_argument("--focal-gamma", type=float, default=2.0)
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = run_all_parser().parse_args()
+    if min(args.n_trials, args.epochs, args.final_epochs, args.patch_points, args.patches_per_scene) < 1:
+        raise SystemExit("n-trials, epochs, final-epochs, patch-points и patches-per-scene должны быть положительными")
     args.runs.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     # Study с другим loss hpo_pointnet.py не продолжит: focal-прогоны идут в свои каталоги.
@@ -77,6 +85,7 @@ def main():
             sh(ROOT / "hpo_pointnet.py", "--data-dir", data, "--output-dir", args.runs / name,
                "--target", target, "--features", features, "--seed", args.seed,
                "--n-trials", n_trials, "--epochs", epochs, "--workers", args.workers,
+               "--patch-points", args.patch_points, "--patches-per-scene", args.patches_per_scene,
                "--loss", args.loss, "--focal-gamma", args.focal_gamma, *extra)
             say(f"=== {time.strftime('%T')} {name} за {since(started)}")
 

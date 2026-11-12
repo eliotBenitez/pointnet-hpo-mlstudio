@@ -8,6 +8,35 @@ from pathlib import Path
 import numpy as np
 
 import hpo_pointnet as hpo
+import run_all
+
+
+class RunAllTests(unittest.TestCase):
+    def test_run_all_parser_accepts_patch_options(self):
+        parser = run_all.run_all_parser()
+        args = parser.parse_args(["--patch-points", "1024", "--patches-per-scene", "3", "--loss", "focal", "--focal-gamma", "1.5"])
+        self.assertEqual((args.patch_points, args.patches_per_scene), (1024, 3))
+        self.assertEqual((args.loss, args.focal_gamma), ("focal", 1.5))
+
+
+class CompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.info = {
+            "data_dir": "exports_small", "seed": 42, "epochs": 10,
+            "target": "ground", "features": "xyz", "patch_points": 16384,
+            "patches_per_scene": 2, "loss": "ce",
+        }
+
+    def test_equal_study_is_compatible(self):
+        self.assertIsNone(hpo.study_compatibility_error(
+            {"compatibility": hpo.compatibility_info(self.info)}, self.info))
+
+    def test_changed_patch_parameter_is_incompatible(self):
+        attrs = {"compatibility": hpo.compatibility_info(self.info) | {"patch_points": 1024}}
+        self.assertIn("patch_points", hpo.study_compatibility_error(attrs, self.info))
+
+    def test_missing_compatibility_metadata_is_incompatible(self):
+        self.assertIn("отсутствуют", hpo.study_compatibility_error({}, self.info))
 
 
 class DataSummaryTests(unittest.TestCase):

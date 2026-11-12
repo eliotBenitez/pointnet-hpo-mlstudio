@@ -560,6 +560,33 @@ def write_best(study, output_dir, run_info):
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+COMPATIBILITY_FIELDS = ("data_dir", "seed", "epochs", "target", "features",
+                       "patch_points", "patches_per_scene", "loss")
+
+
+def compatibility_info(run_info):
+    """Параметры, при которых trials остаются сопоставимыми."""
+    return {key: run_info.get(key) for key in COMPATIBILITY_FIELDS}
+
+
+def study_compatibility_error(study_attrs, run_info):
+    """Возвращает текст ошибки для несовместимого существующего study."""
+    expected = compatibility_info(run_info)
+    actual = study_attrs.get("compatibility")
+    if isinstance(actual, str):
+        try:
+            actual = json.loads(actual)
+        except json.JSONDecodeError:
+            actual = None
+    if not isinstance(actual, dict):
+        return "у study отсутствуют параметры совместимости; укажите новую --output-dir"
+    differences = [key for key in COMPATIBILITY_FIELDS if actual.get(key) != expected.get(key)]
+    if differences:
+        changed = ", ".join(differences)
+        return f"у study отличаются параметры совместимости: {changed}; укажите новую --output-dir"
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -595,6 +622,18 @@ def main(argv=None):
         raise SystemExit("Установите torch-pointcloud==0.0.16 и его PyG-зависимости") from exc
     seed_everything(args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if (args.output_dir / "study.db").exists():
+        existing = optuna.load_study(study_name="pointnet_binary", storage=f"sqlite:///{(args.output_dir / 'study.db').as_posix()}")
+        if existing.trials:
+            requested = dict(data_dir=str(args.data_dir), seed=args.seed, epochs=args.epochs,
+                             target=args.target, features=args.features, patch_points=args.patch_points,
+                             patches_per_scene=args.patches_per_scene,
+                             loss="ce" if args.loss == "ce" else f"focal(gamma={args.focal_gamma:g})")
+            error = study_compatibility_error(existing.user_attrs, requested)
+            if error:
+                raise SystemExit(f"{args.output_dir}: {error}")
+            if existing.user_attrs.get("search_space") != SEARCH_SPACE_VERSION:
+                raise SystemExit(f"{args.output_dir}: несовместимая версия study; укажите новую --output-dir")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     target_ids = TARGETS[args.target]
     data_summary = generate_data_summary(args.data_dir)
@@ -795,6 +834,7 @@ def main(argv=None):
                          f"запрошено {run_info['loss']}; укажите другую --output-dir")
     study.set_user_attr("search_space", SEARCH_SPACE_VERSION)
     study.set_user_attr("loss", run_info["loss"])
+    study.set_user_attr("compatibility", compatibility_info(run_info))
     if args.fixed_params and not study.trials:
         study.enqueue_trial(json.loads(args.fixed_params.read_text(encoding="utf-8")))
     study.optimize(objective, n_trials=args.n_trials, callbacks=[log_trial],

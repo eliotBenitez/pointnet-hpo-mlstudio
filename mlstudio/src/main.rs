@@ -10,16 +10,16 @@ mod scenario;
 use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use data::*;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::chart::LineChart;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::*;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tooltip::Tooltip;
@@ -196,8 +196,19 @@ const LOG_DIR: &str = "mlstudio-logs";
 
 /// Имя лог-файла: `<название>__<UTC-время>.log`, время сортируется как строка.
 fn log_file_name(title: &str) -> String {
-    let safe: String = title.chars().map(|c| if c.is_alphanumeric() || "-_.+".contains(c) { c } else { '_' }).collect();
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let safe: String = title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || "-_.+".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs()) as i64;
     format!("{safe}__{}.log", utc_stamp(secs))
 }
 
@@ -213,7 +224,12 @@ fn utc_stamp(secs: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}_{:02}-{:02}-{:02}Z", rem / 3600, rem / 60 % 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}_{:02}-{:02}-{:02}Z",
+        rem / 3600,
+        rem / 60 % 60,
+        rem % 60
+    )
 }
 
 /// Последний лог-файл процесса с таким названием (название прогона = название процесса).
@@ -222,7 +238,12 @@ fn latest_log(root: &Path, title: &str) -> Option<PathBuf> {
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).and_then(|n| n.split_once("__")).is_some_and(|(t, _)| t == title))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.split_once("__"))
+                .is_some_and(|(t, _)| t == title)
+        })
         .collect();
     logs.sort();
     logs.pop()
@@ -325,7 +346,8 @@ impl Job {
         let done = self.epochs.len() as f64;
         let per = (last.at - self.segment_start).as_secs_f64() / done;
         let left_trials = self.n_trials.saturating_sub(self.trial_in_run(last.trial)) as f64;
-        let left = left_trials * self.n_epochs as f64 + self.n_epochs.saturating_sub(last.epoch) as f64;
+        let left =
+            left_trials * self.n_epochs as f64 + self.n_epochs.saturating_sub(last.epoch) as f64;
         Some(Duration::from_secs_f64(per * left))
     }
 }
@@ -467,10 +489,14 @@ struct Studio {
     tasks: Vec<&'static str>,
     python: Entity<InputState>,
     data_dir: Entity<InputState>,
+    final_data_dir: Entity<InputState>,
+    runs_dir: Entity<InputState>,
     out_name: Entity<InputState>,
     trials: Entity<InputState>,
     epochs: Entity<InputState>,
     final_epochs: Entity<InputState>,
+    patch_points: Entity<InputState>,
+    patches_per_scene: Entity<InputState>,
     seed: Entity<InputState>,
     workers: Entity<InputState>,
     /// «Тестирование»: ключ выбранной модели, датасет, сколько сцен, загруженные .pt, результат теста.
@@ -503,9 +529,14 @@ impl Studio {
         let tick = cx.spawn(async move |this, cx| {
             let mut n = 0u32;
             loop {
-                cx.background_executor().timer(Duration::from_millis(200)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(200))
+                    .await;
                 n += 1;
-                if this.update(cx, |this, cx| this.tick(n % 10 == 0, cx)).is_err() {
+                if this
+                    .update(cx, |this, cx| this.tick(n % 10 == 0, cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -534,7 +565,10 @@ impl Studio {
             .map(|p| root.join(p))
             .find(|p| p.exists())
             .map_or_else(|| "python".into(), |p| p.to_string_lossy().into_owned());
-        let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+        let dark = matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        );
         let mut input = |v: &str, ph: &str| {
             let (v, ph) = (v.to_string(), ph.to_string());
             cx.new(|cx| InputState::new(window, cx).default_value(v).placeholder(ph))
@@ -587,7 +621,9 @@ impl Studio {
                 Some(SPACE_VERSION) => None,
                 v => Some(format!(
                     "Редактор рассчитан на пространство поиска v{SPACE_VERSION}, а в hpo_pointnet.py {} — диапазоны могли измениться. Обновите SPACE в src/data.rs.",
-                    v.map_or("версия не найдена".into(), |v| format!("v{v}"))
+                    v.map_or("версия не найдена".into(), |v| format!(
+                        "v{v}"
+                    ))
                 )),
             },
             scanning: false,
@@ -606,10 +642,14 @@ impl Studio {
             tasks: TASKS.to_vec(),
             python: input(&python, "python"),
             data_dir: input(&data, "каталог с scene_*.npy"),
+            final_data_dir: input("exports_final", "каталог для финальных прогонов"),
+            runs_dir: input("runs", "каталог результатов"),
             out_name: input("", "по умолчанию <класс>_<признаки>"),
             trials: input("25", ""),
             epochs: input("10", ""),
             final_epochs: input("30", ""),
+            patch_points: input("16384", ""),
+            patches_per_scene: input("2", ""),
             seed: input("42", ""),
             workers: input("0", ""),
             loss: "ce",
@@ -626,22 +666,36 @@ impl Studio {
             _quit: quit,
         };
         this.select_best_trial();
-        this._note_sub = Some(cx.subscribe(&this.note, |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
-            if matches!(ev, gpui_kit::component::input::InputEvent::Change) {
-                let text = input.read(cx).value().to_string();
-                this.save_note(text);
-            }
-        }));
-        this._scenario_sub = Some(cx.subscribe(&this.scenario_name, |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
-            use gpui_kit::component::input::InputEvent as E;
-            if matches!(ev, E::PressEnter { .. } | E::Blur) {
-                let to = input.read(cx).value().to_string();
-                this.rename_scenario(to);
-                cx.notify();
-            }
-        }));
+        this._note_sub = Some(cx.subscribe(
+            &this.note,
+            |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
+                if matches!(ev, gpui_kit::component::input::InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    this.save_note(text);
+                }
+            },
+        ));
+        this._scenario_sub = Some(cx.subscribe(
+            &this.scenario_name,
+            |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
+                use gpui_kit::component::input::InputEvent as E;
+                if matches!(ev, E::PressEnter { .. } | E::Blur) {
+                    let to = input.read(cx).value().to_string();
+                    this.rename_scenario(to);
+                    cx.notify();
+                }
+            },
+        ));
         this.check_env(cx);
-        Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx);
+        Theme::change(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            Some(window),
+            cx,
+        );
         this
     }
 
@@ -657,9 +711,16 @@ impl Studio {
                 for l in &out.lines[from..] {
                     if let Some((name, target, features)) = parse_run_header(l) {
                         // run_all: финальные прогоны — 1 trial и --final-epochs, остальные — общие --n-trials/--epochs.
-                        let n = |k: &str, d: u32| Job::arg(&job.args, k).and_then(|v| v.parse().ok()).unwrap_or(d);
-                        (job.n_trials, job.n_epochs) =
-                            if name.starts_with("final_") { (1, n("--final-epochs", 30)) } else { (n("--n-trials", 25), n("--epochs", 10)) };
+                        let n = |k: &str, d: u32| {
+                            Job::arg(&job.args, k)
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(d)
+                        };
+                        (job.n_trials, job.n_epochs) = if name.starts_with("final_") {
+                            (1, n("--final-epochs", 30))
+                        } else {
+                            (n("--n-trials", 25), n("--epochs", 10))
+                        };
                         (job.run, job.target, job.features) = (name, target, features);
                         job.epochs.clear();
                         job.baseline = None;
@@ -668,13 +729,27 @@ impl Studio {
                         job.scene_progress = None;
                         job.patch_progress = None;
                     } else if let Some((trial, epoch, f1, base)) = parse_epoch_line(l) {
-                        job.epochs.push(Epoch { trial, epoch, f1, at: now });
+                        job.epochs.push(Epoch {
+                            trial,
+                            epoch,
+                            f1,
+                            at: now,
+                        });
                         job.baseline = base.or(job.baseline);
                     } else if let Some((k, n, name)) = parse_scene_header(l) {
                         // Поля по отдельности: `out` держит ссылку на job.out, методы взяли бы весь job.
                         job.scene_progress = Some((k, n));
                         job.patch_progress = None;
-                        job.scenes.push((name, SceneMetrics { f1: f64::NAN, precision: f64::NAN, recall: f64::NAN, baseline: None, uncovered: 0 }));
+                        job.scenes.push((
+                            name,
+                            SceneMetrics {
+                                f1: f64::NAN,
+                                precision: f64::NAN,
+                                recall: f64::NAN,
+                                baseline: None,
+                                uncovered: 0,
+                            },
+                        ));
                     } else if let Some(m) = parse_scene_line(l) {
                         // Метрики сцены дописываются в последнюю начатую строку: заголовок и метрики идут парами.
                         match job.scenes.last_mut() {
@@ -688,7 +763,8 @@ impl Studio {
                 job.seen = out.dropped + out.lines.len();
                 dirty = true;
                 if self.autoscroll && i == self.sel_job {
-                    self.log_scroll.scroll_to_item(out.lines.len().saturating_sub(1), ScrollStrategy::Top);
+                    self.log_scroll
+                        .scroll_to_item(out.lines.len().saturating_sub(1), ScrollStrategy::Top);
                 }
             }
             if job.ended.is_none() {
@@ -713,14 +789,25 @@ impl Studio {
         if setup_done {
             self.check_env(cx);
         }
-        if self.active.as_ref().is_some_and(|a| a.job.is_some_and(|j| !self.jobs[j].running())) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|a| a.job.is_some_and(|j| !self.jobs[j].running()))
+        {
             self.advance_scenario(cx);
         }
         for (pj, ok) in preds_done {
             if ok {
                 self.load_prediction(pj, cx);
-            } else if let Some(pv) = self.preview.as_mut().filter(|p| p.scene == pj.scene).and_then(|p| p.pred.as_mut()) {
-                pv.result = Some(Err("predict_scene.py завершился с ошибкой — подробности в «Трансляции»".into()));
+            } else if let Some(pv) = self
+                .preview
+                .as_mut()
+                .filter(|p| p.scene == pj.scene)
+                .and_then(|p| p.pred.as_mut())
+            {
+                pv.result = Some(Err(
+                    "predict_scene.py завершился с ошибкой — подробности в «Трансляции»".into(),
+                ));
             }
         }
         if rescan {
@@ -743,7 +830,12 @@ impl Studio {
         if self.active.is_some() || self.confirm_stop.is_some() {
             return;
         }
-        let mut left = self.jobs.iter().filter(|j| !j.running()).count().saturating_sub(KEEP_DONE);
+        let mut left = self
+            .jobs
+            .iter()
+            .filter(|j| !j.running())
+            .count()
+            .saturating_sub(KEEP_DONE);
         if left == 0 {
             return;
         }
@@ -759,7 +851,11 @@ impl Studio {
             self.jobs.push(j);
         }
         let sel = map.get(self.sel_job).copied().unwrap_or(usize::MAX);
-        self.sel_job = if sel == usize::MAX { self.jobs.len().saturating_sub(1) } else { sel };
+        self.sel_job = if sel == usize::MAX {
+            self.jobs.len().saturating_sub(1)
+        } else {
+            sel
+        };
     }
 
     /// Пересканировать runs/ (и графики выбранного trial) в фоне — диск не блокирует окно.
@@ -777,7 +873,10 @@ impl Studio {
                 .background_executor()
                 .spawn(async move {
                     let runs = scan_runs(&dir);
-                    let epochs = match (runs.iter().find(|r| Some(&r.name) == scan_name.as_ref()), &scan_trial) {
+                    let epochs = match (
+                        runs.iter().find(|r| Some(&r.name) == scan_name.as_ref()),
+                        &scan_trial,
+                    ) {
                         (Some(r), Some(t)) => read_epochs(&r.path, t),
                         _ => vec![],
                     };
@@ -788,7 +887,11 @@ impl Studio {
                 this.scanning = false;
                 let current = this.runs.get(this.sel_run).map(|r| r.name.clone());
                 this.runs = runs;
-                this.sel_run = this.runs.iter().position(|r| Some(&r.name) == current.as_ref()).unwrap_or(0);
+                this.sel_run = this
+                    .runs
+                    .iter()
+                    .position(|r| Some(&r.name) == current.as_ref())
+                    .unwrap_or(0);
                 // Выбор мог смениться, пока шло сканирование, — тогда графики этого trial перечитаем.
                 // Прогон впервые появился (или сменился) — показать его лучший trial.
                 if this.sel_trial.is_none() || current != name {
@@ -807,7 +910,10 @@ impl Studio {
     fn reload_datasets(&mut self, cx: &mut Context<Self>) {
         let root = self.root.clone();
         cx.spawn(async move |this, cx| {
-            let datasets = cx.background_executor().spawn(async move { scan_datasets(&root) }).await;
+            let datasets = cx
+                .background_executor()
+                .spawn(async move { scan_datasets(&root) })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.datasets = datasets;
                 this.sel_dataset = this.sel_dataset.min(this.datasets.len().saturating_sub(1));
@@ -818,7 +924,10 @@ impl Studio {
     }
 
     fn select_best_trial(&mut self) {
-        self.sel_trial = self.runs.get(self.sel_run).and_then(|r| Some(r.best.as_ref()?.get("best_trial")?.as_u64()?.to_string()));
+        self.sel_trial = self
+            .runs
+            .get(self.sel_run)
+            .and_then(|r| Some(r.best.as_ref()?.get("best_trial")?.as_u64()?.to_string()));
         self.load_trial_epochs();
     }
 
@@ -831,7 +940,15 @@ impl Studio {
 
     fn set_dark(&mut self, dark: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.dark = dark;
-        Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx);
+        Theme::change(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            Some(window),
+            cx,
+        );
         self.redraw_preview(Some(window), cx);
         cx.notify();
     }
@@ -839,7 +956,9 @@ impl Studio {
     /// Заполнить редактор значениями (недостающие ключи не трогаются).
     fn apply_params(&mut self, params: &Params, window: &mut Window, cx: &mut Context<Self>) {
         for (i, spec) in SPACE.iter().enumerate() {
-            let Some(v) = params.get(spec.key) else { continue };
+            let Some(v) = params.get(spec.key) else {
+                continue;
+            };
             match &self.param_inputs[i] {
                 Some(input) => Self::set_input(input, spec.show(v), window, cx),
                 None => self.param_choice[i] = v.clone(),
@@ -870,9 +989,19 @@ impl Studio {
         self.params_note = Some(if s.of == 0 {
             "Завершённых trials пока нет — выставлены середины диапазонов поиска.".into()
         } else if s.all_classes {
-            format!("Для класса «{class}» trials нет: медиана лучших {} из {} trials всех классов ({}).", s.used, s.of, s.runs.join(", "))
+            format!(
+                "Для класса «{class}» trials нет: медиана лучших {} из {} trials всех классов ({}).",
+                s.used,
+                s.of,
+                s.runs.join(", ")
+            )
         } else {
-            format!("Медиана лучших {} из {} завершённых trials класса «{class}» ({}).", s.used, s.of, s.runs.join(", "))
+            format!(
+                "Медиана лучших {} из {} завершённых trials класса «{class}» ({}).",
+                s.used,
+                s.of,
+                s.runs.join(", ")
+            )
         });
         cx.notify();
     }
@@ -886,7 +1015,16 @@ impl Studio {
             title = format!("run_all {}", self.tasks.join(" "));
             args.extend(["run_all.py", "--tasks"].map(String::from));
             args.extend(self.tasks.iter().map(|t| t.to_string()));
-            args.extend(["--data".into(), v(&self.data_dir), "--final-epochs".into(), v(&self.final_epochs)]);
+            args.extend([
+                "--data".into(),
+                v(&self.data_dir),
+                "--final-data".into(),
+                v(&self.final_data_dir),
+                "--runs".into(),
+                v(&self.runs_dir),
+                "--final-epochs".into(),
+                v(&self.final_epochs),
+            ]);
         } else {
             let suffix = if self.custom { "_custom" } else { "" };
             // Study с другим loss hpo_pointnet.py не продолжит: focal по умолчанию в свой каталог.
@@ -895,20 +1033,48 @@ impl Studio {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("{}_{}{focal}{suffix}", self.target, self.features));
             title = name.clone();
-            args.extend(["hpo_pointnet.py".into(), "--data-dir".into(), v(&self.data_dir)]);
-            args.extend(["--output-dir".into(), format!("runs/{name}")]);
+            args.extend([
+                "hpo_pointnet.py".into(),
+                "--data-dir".into(),
+                v(&self.data_dir),
+            ]);
+            let runs = PathBuf::from(v(&self.runs_dir));
+            args.extend([
+                "--output-dir".into(),
+                runs.join(&name).to_string_lossy().into_owned(),
+            ]);
             args.extend(["--target", self.target, "--features", self.features].map(String::from));
             if self.custom {
-                args.extend(["--fixed-params".into(), format!("runs/{name}.params.json")]);
+                args.extend([
+                    "--fixed-params".into(),
+                    runs.join(format!("{name}.params.json"))
+                        .to_string_lossy()
+                        .into_owned(),
+                ]);
             }
         }
-        let n_trials = if !self.run_all && self.custom && self.custom_only { "1".into() } else { v(&self.trials) };
+        let n_trials = if !self.run_all && self.custom && self.custom_only {
+            "1".into()
+        } else {
+            v(&self.trials)
+        };
         args.extend(["--n-trials".into(), n_trials]);
-        for (k, i) in [("--epochs", &self.epochs), ("--seed", &self.seed), ("--workers", &self.workers)] {
+        for (k, i) in [
+            ("--epochs", &self.epochs),
+            ("--seed", &self.seed),
+            ("--workers", &self.workers),
+            ("--patch-points", &self.patch_points),
+            ("--patches-per-scene", &self.patches_per_scene),
+        ] {
             args.extend([k.into(), v(i)]);
         }
         if self.loss == "focal" {
-            args.extend(["--loss".into(), "focal".into(), "--focal-gamma".into(), v(&self.focal_gamma)]);
+            args.extend([
+                "--loss".into(),
+                "focal".into(),
+                "--focal-gamma".into(),
+                v(&self.focal_gamma),
+            ]);
         }
         args.extend(v(&self.extra).split_whitespace().map(String::from));
         (v(&self.python), args, title)
@@ -929,8 +1095,14 @@ impl Studio {
         let log_path = std::fs::create_dir_all(self.root.join(LOG_DIR))
             .ok()
             .map(|_| self.root.join(LOG_DIR).join(log_file_name(&title)))
-            .filter(|p| std::fs::File::create(p).map(|f| out.lock().unwrap().file = Some(f)).is_ok());
-        out.lock().unwrap().push(format!("$ {program} {}", args.join(" ")));
+            .filter(|p| {
+                std::fs::File::create(p)
+                    .map(|f| out.lock().unwrap().file = Some(f))
+                    .is_ok()
+            });
+        out.lock()
+            .unwrap()
+            .push(format!("$ {program} {}", args.join(" ")));
         let pid = match cmd.spawn() {
             Err(e) => {
                 let mut o = out.lock().unwrap();
@@ -946,15 +1118,25 @@ impl Studio {
                     && let Some(dir) = Job::arg(&args, "--output-dir")
                 {
                     let (author, host) = who();
-                    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+                    let secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs()) as i64;
                     // Содержимое --fixed-params: файл рядом могут переписать, а повтор должен взять ту же конфигурацию.
-                    let fixed = Job::arg(&args, "--fixed-params").and_then(|f| serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(self.root.join(f)).ok()?).ok());
+                    let fixed = Job::arg(&args, "--fixed-params").and_then(|f| {
+                        serde_json::from_str::<serde_json::Value>(
+                            &std::fs::read_to_string(self.root.join(f)).ok()?,
+                        )
+                        .ok()
+                    });
                     let launch = serde_json::json!({ "author": author, "host": host, "started": utc_stamp(secs), "program": program, "args": args, "fixed_params": fixed });
                     if let Err(e) = record_launch(&self.root, &self.root.join(&dir), launch) {
                         out.lock().unwrap().push(format!("Не удалось записать {dir}/{STUDIO_FILE}: {e} — запуск идёт, но без записи «кто и как»."));
                     }
                 }
-                let readers = [pipe(child.stdout.take().unwrap(), out.clone()), pipe(child.stderr.take().unwrap(), out.clone())];
+                let readers = [
+                    pipe(child.stdout.take().unwrap(), out.clone()),
+                    pipe(child.stderr.take().unwrap(), out.clone()),
+                ];
                 let out = out.clone();
                 std::thread::spawn(move || {
                     let status = child.wait();
@@ -968,9 +1150,15 @@ impl Studio {
                         Ok(s) if s.success() => (Ok(()), "=== процесс завершён".to_string()),
                         Ok(s) => {
                             let code = s.code().map_or("?".into(), |c| c.to_string());
-                            (Err(format!("код {code}")), format!("=== процесс завершился с кодом {code}"))
+                            (
+                                Err(format!("код {code}")),
+                                format!("=== процесс завершился с кодом {code}"),
+                            )
                         }
-                        Err(e) => (Err(e.to_string()), format!("=== ошибка ожидания процесса: {e}")),
+                        Err(e) => (
+                            Err(e.to_string()),
+                            format!("=== ошибка ожидания процесса: {e}"),
+                        ),
                     };
                     o.push(msg);
                     o.exit = Some(exit);
@@ -1020,10 +1208,23 @@ impl Studio {
         if let Some(img) = self.preview.take().and_then(|p| p.image) {
             cx.drop_image(img, None);
         }
-        self.preview = Some(Preview { scene: scene.clone(), cloud: None, view: cloud::View::default(), by: cloud::ColorBy::Class, image: None, last: None, dirty: false, pred: None, pending: None });
+        self.preview = Some(Preview {
+            scene: scene.clone(),
+            cloud: None,
+            view: cloud::View::default(),
+            by: cloud::ColorBy::Class,
+            image: None,
+            last: None,
+            dirty: false,
+            pred: None,
+            pending: None,
+        });
         cx.spawn(async move |this, cx| {
             let path = scene.clone();
-            let loaded = cx.background_executor().spawn(async move { cloud::load(&path).map(Arc::new) }).await;
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { cloud::load(&path).map(Arc::new) })
+                .await;
             _ = this.update(cx, |this, cx| {
                 // Пока грузилось, могли выбрать другую сцену.
                 if let Some(p) = this.preview.as_mut().filter(|p| p.scene == scene) {
@@ -1041,20 +1242,36 @@ impl Studio {
 
     /// Модели для проверки сцены: лучший trial каждого прогона, у которого есть best.pt.
     fn models(&self, scene: &Path) -> Vec<Model> {
-        let file = scene.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let file = scene
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut out: Vec<Model> = self
             .runs
             .iter()
             .filter_map(|r| {
                 let trial = r.best.as_ref()?.get("best_trial")?.as_u64()?;
                 let checkpoint = r.path.join(format!("trial_{trial:04}")).join("best.pt");
-                let in_list = |k: &str| r.split.as_ref()?.get(k)?.as_array().map(|a| a.iter().any(|v| v.as_str() == Some(&file)));
+                let in_list = |k: &str| {
+                    r.split
+                        .as_ref()?
+                        .get(k)?
+                        .as_array()
+                        .map(|a| a.iter().any(|v| v.as_str() == Some(&file)))
+                };
                 let split = match (in_list("val"), in_list("train")) {
                     (Some(true), _) => Some("val"),
                     (_, Some(true)) => Some("train"),
                     _ => None,
                 };
-                checkpoint.exists().then(|| Model { run: r.name.clone(), trial, f1: r.best_f1(), checkpoint, target: r.target().unwrap_or_default(), split })
+                checkpoint.exists().then(|| Model {
+                    run: r.name.clone(),
+                    trial,
+                    f1: r.best_f1(),
+                    checkpoint,
+                    target: r.target().unwrap_or_default(),
+                    split,
+                })
             })
             .collect();
         out.sort_by(|a, b| b.f1.unwrap_or(0.).total_cmp(&a.f1.unwrap_or(0.)));
@@ -1063,12 +1280,30 @@ impl Studio {
 
     /// Проверить сцену превью моделью: готовое предсказание — сразу, иначе процесс predict_scene.py.
     fn predict(&mut self, m: Model, cx: &mut Context<Self>) {
-        let Some(scene) = self.preview.as_ref().map(|p| p.scene.clone()) else { return };
-        let stem = scene.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let out = self.root.join("runs").join(&m.run).join("pred").join(format!("{stem}__trial{}.npy", m.trial));
-        let job = PredJob { scene: scene.clone(), out: out.clone(), target: m.target.clone() };
+        let Some(scene) = self.preview.as_ref().map(|p| p.scene.clone()) else {
+            return;
+        };
+        let stem = scene
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let out = self
+            .root
+            .join("runs")
+            .join(&m.run)
+            .join("pred")
+            .join(format!("{stem}__trial{}.npy", m.trial));
+        let job = PredJob {
+            scene: scene.clone(),
+            out: out.clone(),
+            target: m.target.clone(),
+        };
         if let Some(p) = self.preview.as_mut() {
-            p.pred = Some(PredView { label: format!("{} · trial {}", m.run, m.trial), split: m.split, result: None });
+            p.pred = Some(PredView {
+                label: format!("{} · trial {}", m.run, m.trial),
+                split: m.split,
+                result: None,
+            });
         }
         if out.exists() {
             self.load_prediction(job, cx);
@@ -1104,8 +1339,17 @@ impl Studio {
 
     /// Прочитать готовое предсказание в фоне и показать «Ошибки», если сцена всё ещё открыта.
     fn load_prediction(&mut self, pj: PredJob, cx: &mut Context<Self>) {
-        let Some(Some(Ok(cloud))) = self.preview.as_ref().filter(|p| p.scene == pj.scene).map(|p| p.cloud.clone()) else {
-            if let Some(p) = self.preview.as_mut().filter(|p| p.scene == pj.scene && p.cloud.is_none()) {
+        let Some(Some(Ok(cloud))) = self
+            .preview
+            .as_ref()
+            .filter(|p| p.scene == pj.scene)
+            .map(|p| p.cloud.clone())
+        else {
+            if let Some(p) = self
+                .preview
+                .as_mut()
+                .filter(|p| p.scene == pj.scene && p.cloud.is_none())
+            {
                 p.pending = Some(pj);
             }
             return;
@@ -1113,9 +1357,14 @@ impl Studio {
         cx.spawn(async move |this, cx| {
             let target = pj.target.clone();
             let out = pj.out.clone();
-            let res = cx.background_executor().spawn(async move { cloud::load_pred(&out, &cloud, &target) }).await;
+            let res = cx
+                .background_executor()
+                .spawn(async move { cloud::load_pred(&out, &cloud, &target) })
+                .await;
             _ = this.update(cx, |this, cx| {
-                let Some(p) = this.preview.as_mut().filter(|p| p.scene == pj.scene) else { return };
+                let Some(p) = this.preview.as_mut().filter(|p| p.scene == pj.scene) else {
+                    return;
+                };
                 if res.is_ok() {
                     p.by = cloud::ColorBy::Errors;
                 }
@@ -1132,12 +1381,22 @@ impl Studio {
     /// Перерисовать картинку превью (вид, цвет или тема поменялись); старую текстуру освободить.
     fn redraw_preview(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let bg = if self.dark { 0x0E1013 } else { 0xF6F6F7 }; // = Pal::bg, чтобы картинка сливалась с панелью
-        let Some(p) = self.preview.as_mut() else { return };
+        let Some(p) = self.preview.as_mut() else {
+            return;
+        };
         p.dirty = false;
         let Some(Ok(c)) = &p.cloud else { return };
         // Пока тянут мышью — половинное разрешение и каждая 3-я точка; отпустили — полное качество.
-        let (w, h, stride) = if p.last.is_some() { (PREVIEW_W / 2, PREVIEW_H / 2, 3) } else { (PREVIEW_W, PREVIEW_H, 1) };
-        let outcome = p.pred.as_ref().and_then(|x| x.result.as_ref()?.as_ref().ok()).map(|o| o.sample.as_slice());
+        let (w, h, stride) = if p.last.is_some() {
+            (PREVIEW_W / 2, PREVIEW_H / 2, 3)
+        } else {
+            (PREVIEW_W, PREVIEW_H, 1)
+        };
+        let outcome = p
+            .pred
+            .as_ref()
+            .and_then(|x| x.result.as_ref()?.as_ref().ok())
+            .map(|o| o.sample.as_slice());
         let px = cloud::render(c, &p.view, w, h, stride, p.by, outcome, bg, class_hex);
         let frame = image::Frame::new(image::RgbaImage::from_raw(w, h, px).expect("размер буфера"));
         if let Some(old) = p.image.replace(Arc::new(RenderImage::new(vec![frame]))) {
@@ -1154,12 +1413,19 @@ impl Studio {
         self.env_checking = true;
         let root = self.root.clone();
         cx.spawn(async move |this, cx| {
-            let info = cx.background_executor().spawn(async move { env::detect(&root) }).await;
+            let info = cx
+                .background_executor()
+                .spawn(async move { env::detect(&root) })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.env_checking = false;
                 // Окружение появилось — подставить его Python в «Запуск», если там общий python.
                 if let Some(v) = &info.venv {
-                    if info.packages.as_ref().is_some_and(|p| p.as_ref().is_ok_and(|p| p.missing().is_empty())) {
+                    if info
+                        .packages
+                        .as_ref()
+                        .is_some_and(|p| p.as_ref().is_ok_and(|p| p.missing().is_empty()))
+                    {
                         this.pending_python = Some(v.to_string_lossy().into_owned());
                     }
                 }
@@ -1190,16 +1456,31 @@ impl Studio {
         let build = self.build.unwrap_or_else(|| info.recommended_build());
         let base = info.base.as_ref().map(|b| b.0.clone());
         let steps = env::setup_steps(&self.root, base.as_deref(), info.venv.is_some(), build);
-        let runner = info.venv.clone().or(base).map(|p| p.to_string_lossy().into_owned());
+        let runner = info
+            .venv
+            .clone()
+            .or(base)
+            .map(|p| p.to_string_lossy().into_owned());
         let Some(runner) = runner else { return };
-        let args = vec!["-u".into(), "-c".into(), env::RUNNER.into(), serde_json::to_string(&steps).unwrap()];
-        self.spawn_setup(runner, args, &format!("Окружение: torch {}+{build}", env::TORCH));
+        let args = vec![
+            "-u".into(),
+            "-c".into(),
+            env::RUNNER.into(),
+            serde_json::to_string(&steps).unwrap(),
+        ];
+        self.spawn_setup(
+            runner,
+            args,
+            &format!("Окружение: torch {}+{build}", env::TORCH),
+        );
     }
 
     /// Класс и признаки формы — из прогона (split.json → best.json).
     /// Мини-копия выбранного датасета (жёсткие ссылки) и выбор её для запуска.
     fn make_mini(&mut self, cx: &mut Context<Self>) {
-        let Some(d) = self.datasets.get(self.sel_dataset) else { return };
+        let Some(d) = self.datasets.get(self.sel_dataset) else {
+            return;
+        };
         let d = d.clone();
         self.ds_note = Some((true, format!("Создаю {}_mini…", d.name)));
         cx.spawn(async move |this, cx| {
@@ -1232,9 +1513,16 @@ impl Studio {
             return;
         }
         let params = self.root.join("runs").join(format!("{name}.params.json"));
-        let targets: Vec<PathBuf> = [Some(r.path.clone()), params.exists().then_some(params)].into_iter().flatten().collect();
+        let targets: Vec<PathBuf> = [Some(r.path.clone()), params.exists().then_some(params)]
+            .into_iter()
+            .flatten()
+            .collect();
         match trash::delete_all(&targets) {
-            Err(e) => self.delete_error = Some(format!("Не удалось переместить {name} в корзину: {e}. Ничего не удалено.")),
+            Err(e) => {
+                self.delete_error = Some(format!(
+                    "Не удалось переместить {name} в корзину: {e}. Ничего не удалено."
+                ))
+            }
             Ok(()) => {
                 self.delete_error = None;
                 self.runs.remove(idx);
@@ -1247,19 +1535,141 @@ impl Studio {
         cx.notify();
     }
 
+    fn start_final_run(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(run) = self.runs.get(idx) else {
+            return;
+        };
+        let Some(best) = run.best.as_ref() else {
+            self.tab_error = Some("У прогона нет best.json — финальный прогон невозможен.".into());
+            return;
+        };
+        let final_data = self.final_data_dir.read(cx).value().trim().to_string();
+        if final_data.is_empty() || !self.root.join(&final_data).is_dir() {
+            self.tab_error =
+                Some("Выберите существующий каталог данных для финального прогона.".into());
+            return;
+        }
+        let target = run.target().unwrap_or_default();
+        let features = run.features().unwrap_or_else(|| "xyz".into());
+        let runs_dir = PathBuf::from(self.runs_dir.read(cx).value().trim());
+        let params_path = runs_dir.join(format!("{}.params.json", run.name));
+        let output = runs_dir.join(format!("final_{}", run.name));
+        if self.conflict(Some(&output.to_string_lossy())).is_some()
+            || self.root.join(&output).join("study.db").exists()
+        {
+            self.tab_error = Some(format!(
+                "Финальный прогон final_{} уже занят или существует. Выберите новый каталог результатов.",
+                run.name
+            ));
+            return;
+        }
+        let params = best
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let params_on_disk = self.root.join(&params_path);
+        if params_on_disk.exists() {
+            self.tab_error = Some(format!(
+                "Файл {} уже существует; он не был перезаписан.",
+                params_on_disk.display()
+            ));
+            return;
+        }
+        if let Err(e) = params_on_disk
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| {
+                std::fs::write(
+                    &params_on_disk,
+                    serde_json::to_vec_pretty(&params).unwrap_or_default(),
+                )
+            })
+        {
+            self.tab_error = Some(format!("Не удалось записать параметры финала: {e}"));
+            return;
+        }
+        let value = |key: &str, default: &str| {
+            best.get(key).map_or_else(
+                || default.into(),
+                |v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    v => v.to_string().trim_matches('"').to_string(),
+                },
+            )
+        };
+        let mut args = vec![
+            "-u".into(),
+            "hpo_pointnet.py".into(),
+            "--data-dir".into(),
+            final_data,
+            "--output-dir".into(),
+            output.to_string_lossy().into_owned(),
+            "--target".into(),
+            target,
+            "--features".into(),
+            features,
+            "--fixed-params".into(),
+            params_path.to_string_lossy().into_owned(),
+            "--n-trials".into(),
+            "1".into(),
+            "--epochs".into(),
+            self.final_epochs.read(cx).value().trim().into(),
+            "--seed".into(),
+            value("seed", "42"),
+            "--patch-points".into(),
+            value("patch_points", "16384"),
+            "--patches-per-scene".into(),
+            value("patches_per_scene", "2"),
+            "--workers".into(),
+            self.workers.read(cx).value().trim().into(),
+        ];
+        if run.loss().starts_with("focal") {
+            args.extend([
+                "--loss".into(),
+                "focal".into(),
+                "--focal-gamma".into(),
+                run.loss()
+                    .strip_prefix("focal(gamma=")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .unwrap_or("2")
+                    .into(),
+            ]);
+        }
+        let title = format!("final_{}", run.name);
+        let program = self.python.read(cx).value().trim().to_string();
+        self.spawn(program, args, title);
+        cx.notify();
+    }
+
     fn form_from_run(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         let r = &self.runs[idx];
         // run_info пишется в split.json (и повторяется в best.json): чем именно обучался прогон.
         let info = |k: &str| {
-            [&r.split, &r.best].into_iter().flatten().find_map(|v| match v.get(k)? {
-                serde_json::Value::String(s) => Some(s.clone()),
-                v => v.is_number().then(|| v.to_string()),
-            })
+            [&r.split, &r.best]
+                .into_iter()
+                .flatten()
+                .find_map(|v| match v.get(k)? {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    v => v.is_number().then(|| v.to_string()),
+                })
         };
         let (name, loss, target, features) = (r.name.clone(), r.loss(), r.target(), r.features());
-        let (data, seed, epochs) = (info("data_dir"), info("seed"), info("epochs"));
-        self.loss = if loss.starts_with("focal") { "focal" } else { "ce" };
-        if let Some(g) = loss.strip_prefix("focal(gamma=").and_then(|g| g.strip_suffix(')')) {
+        let (data, seed, epochs, patch_points, patches_per_scene) = (
+            info("data_dir"),
+            info("seed"),
+            info("epochs"),
+            info("patch_points"),
+            info("patches_per_scene"),
+        );
+        self.loss = if loss.starts_with("focal") {
+            "focal"
+        } else {
+            "ce"
+        };
+        if let Some(g) = loss
+            .strip_prefix("focal(gamma=")
+            .and_then(|g| g.strip_suffix(')'))
+        {
             Self::set_input(&self.focal_gamma, g.to_string(), window, cx);
         }
         if let Some(t) = target.and_then(|t| TARGETS.iter().find(|x| **x == t)) {
@@ -1270,11 +1680,27 @@ impl Studio {
         }
         // Продолжение study: --data-dir обязателен, а другие данные, seed или бюджет trial делают
         // trials несравнимыми (hpo_pointnet.py сверяет только версию пространства и loss).
-        let (data_dir, seed_input, epochs_input) = (self.data_dir.clone(), self.seed.clone(), self.epochs.clone());
+        let (data_dir, seed_input, epochs_input) = (
+            self.data_dir.clone(),
+            self.seed.clone(),
+            self.epochs.clone(),
+        );
+        let (points_input, patches_input) =
+            (self.patch_points.clone(), self.patches_per_scene.clone());
         let mut changed: Vec<&str> = vec![];
         let mut missing: Option<String> = None;
-        for (label, want, input) in [("данные", data, &data_dir), ("seed", seed, &seed_input), ("эпохи на trial", epochs, &epochs_input)] {
-            let Some(v) = want.filter(|v| !v.is_empty() && v.as_str() != input.read(cx).value().trim()) else { continue };
+        for (label, want, input) in [
+            ("данные", data, &data_dir),
+            ("seed", seed, &seed_input),
+            ("эпохи на trial", epochs, &epochs_input),
+            ("точки в патче", patch_points, &points_input),
+            ("патчи на сцену", patches_per_scene, &patches_input),
+        ] {
+            let Some(v) =
+                want.filter(|v| !v.is_empty() && v.as_str() != input.read(cx).value().trim())
+            else {
+                continue;
+            };
             // Датасет мог жить на машине коллеги: абсолютный путь туда оставляем в предупреждении.
             let p = PathBuf::from(&v);
             if label == "данные" && p.is_absolute() && !p.exists() {
@@ -1289,7 +1715,9 @@ impl Studio {
             note.push(format!("Из прогона {name} взяты {} — иначе продолженный study смешал бы несравнимые trials.", changed.join(", ")));
         }
         if let Some(p) = missing {
-            note.push(format!("Каталог прогона {p} на этой машине недоступен — выберите данные вручную."));
+            note.push(format!(
+                "Каталог прогона {p} на этой машине недоступен — выберите данные вручную."
+            ));
         }
         self.params_note = (!note.is_empty()).then(|| note.join(" "));
         self.run_all = false;
@@ -1329,8 +1757,18 @@ impl Studio {
     }
 
     fn save_note(&mut self, text: String) {
-        let Some(r) = self.runs.iter_mut().find(|r| Some(&r.name) == self.note_for.as_ref()) else { return };
-        let stored = r.studio.as_ref().and_then(|s| s.get("note")?.as_str()).unwrap_or_default();
+        let Some(r) = self
+            .runs
+            .iter_mut()
+            .find(|r| Some(&r.name) == self.note_for.as_ref())
+        else {
+            return;
+        };
+        let stored = r
+            .studio
+            .as_ref()
+            .and_then(|s| s.get("note")?.as_str())
+            .unwrap_or_default();
         if stored == text {
             return;
         }
@@ -1348,10 +1786,23 @@ impl Studio {
     fn repeat_run(&mut self, idx: usize, cx: &App) {
         self.tab_error = None;
         let r = &self.runs[idx];
-        let Some(last) = r.studio.as_ref().and_then(|s| s["launches"].as_array()?.last().cloned()) else { return };
-        let mut args: Vec<String> = serde_json::from_value(last["args"].clone()).unwrap_or_default();
+        let Some(last) = r
+            .studio
+            .as_ref()
+            .and_then(|s| s["launches"].as_array()?.last().cloned())
+        else {
+            return;
+        };
+        let mut args: Vec<String> =
+            serde_json::from_value(last["args"].clone()).unwrap_or_default();
         let name = (1..)
-            .map(|n| if n == 1 { format!("{}_repeat", r.name) } else { format!("{}_repeat{n}", r.name) })
+            .map(|n| {
+                if n == 1 {
+                    format!("{}_repeat", r.name)
+                } else {
+                    format!("{}_repeat{n}", r.name)
+                }
+            })
             .find(|n| !self.root.join("runs").join(n).exists())
             .unwrap();
         let out_dir = format!("runs/{name}");
@@ -1362,7 +1813,10 @@ impl Studio {
         set_arg(&mut args, "--output-dir", out_dir);
         if !last["fixed_params"].is_null() {
             let f = format!("runs/{name}.params.json");
-            if let Err(e) = std::fs::write(self.root.join(&f), serde_json::to_vec_pretty(&last["fixed_params"]).unwrap()) {
+            if let Err(e) = std::fs::write(
+                self.root.join(&f),
+                serde_json::to_vec_pretty(&last["fixed_params"]).unwrap(),
+            ) {
                 self.tab_error = Some(format!("Не удалось записать {f}: {e}"));
                 return;
             }
@@ -1384,7 +1838,11 @@ impl Studio {
             })
         });
         if let Some(r) = refusal {
-            self.jobs[idx].out.lock().unwrap().push(format!("=== перезапуск отменён: {r}"));
+            self.jobs[idx]
+                .out
+                .lock()
+                .unwrap()
+                .push(format!("=== перезапуск отменён: {r}"));
             return;
         }
         let (p, a, t) = (j.program.clone(), j.args.clone(), j.title.clone());
@@ -1399,7 +1857,12 @@ impl Studio {
         }
     }
 
-    fn set_input(input: &Entity<InputState>, v: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_input(
+        input: &Entity<InputState>,
+        v: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         input.update(cx, |s, cx| s.set_value(v, window, cx));
     }
 
@@ -1413,18 +1876,39 @@ impl Studio {
         let running = j.running();
         let band = class_color(&j.target);
         let done = j.scenes.iter().filter(|(_, m)| !m.f1.is_nan()).count();
-        let total = j.scene_progress.map_or(j.scenes.len(), |(_, n)| n as usize).max(done);
-        let last = j.scenes.iter().rev().find(|(_, m)| !m.f1.is_nan()).map(|(n, m)| (n.clone(), m.clone()));
+        let total = j
+            .scene_progress
+            .map_or(j.scenes.len(), |(_, n)| n as usize)
+            .max(done);
+        let last = j
+            .scenes
+            .iter()
+            .rev()
+            .find(|(_, m)| !m.f1.is_nan())
+            .map(|(n, m)| (n.clone(), m.clone()));
         let score = last.as_ref().map(|(_, m)| m.f1);
-        let line = last.as_ref().and_then(|(_, m)| m.baseline).map(|b| b + MARGIN);
+        let line = last
+            .as_ref()
+            .and_then(|(_, m)| m.baseline)
+            .map(|b| b + MARGIN);
         let diff = score.zip(line).map(|(s, l)| s - l);
         // Лучшая сцена: инференс не улучшает модель, поэтому «лучший в прогоне» — это лучшая сцена.
-        let best = j.scenes.iter().filter(|(_, m)| !m.f1.is_nan()).map(|(_, m)| m.f1).fold(f64::NEG_INFINITY, f64::max);
+        let best = j
+            .scenes
+            .iter()
+            .filter(|(_, m)| !m.f1.is_nan())
+            .map(|(_, m)| m.f1)
+            .fold(f64::NEG_INFINITY, f64::max);
         let best = best.is_finite().then_some(best);
         let patches = j.patch_progress;
         let (title, features) = (j.run.clone(), j.features.clone());
         let elapsed = hms(j.elapsed());
-        let scenes: Vec<(String, SceneMetrics)> = j.scenes.iter().filter(|(_, m)| !m.f1.is_nan()).cloned().collect();
+        let scenes: Vec<(String, SceneMetrics)> = j
+            .scenes
+            .iter()
+            .filter(|(_, m)| !m.f1.is_nan())
+            .cloned()
+            .collect();
         let dark = self.dark;
         let (n_lines, dropped) = {
             let out = j.out.lock().unwrap();
@@ -1433,28 +1917,47 @@ impl Studio {
         let autoscroll = self.autoscroll;
 
         let header = class_card(band, p)
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .child(display(&title, 34., p.ink))
-                    .child(div().text_sm().child(format!("Предсказание модели · {}", if features.is_empty() { "—".into() } else { features }))),
-            )
+            .child(v_flex().min_w_0().child(display(&title, 34., p.ink)).child(
+                div().text_sm().child(format!(
+                    "Предсказание модели · {}",
+                    if features.is_empty() {
+                        "—".into()
+                    } else {
+                        features
+                    }
+                )),
+            ))
             .child(chip(label, chip_bg, chip_fg, running))
             .child(div().flex_1())
             .child(
                 h_flex()
                     .gap_2()
-                    .child(band_button("copy", Lucide::Copy, "Копировать лог", p.raised, p.ink).on_click(cx.listener(|this, _, _, cx| {
-                        let text = this.jobs[this.sel_job].out.lock().unwrap().lines.join("\n");
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    })))
+                    .child(
+                        band_button("copy", Lucide::Copy, "Копировать лог", p.raised, p.ink)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let text =
+                                    this.jobs[this.sel_job].out.lock().unwrap().lines.join("\n");
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            })),
+                    )
                     .when_some(self.jobs[self.sel_job].log_path.clone(), |d, path| {
-                        d.child(band_button("log-file", Lucide::FileText, "Файл лога", p.raised, p.ink).on_click(move |_, _, _| open_path(&path)))
+                        d.child(
+                            band_button("log-file", Lucide::FileText, "Файл лога", p.raised, p.ink)
+                                .on_click(move |_, _, _| open_path(&path)),
+                        )
                     })
                     .when(running, |d| {
-                        let armed = self.confirm_stop.is_some_and(|(i, t)| i == self.sel_job && t.elapsed() < Duration::from_secs(5));
+                        let armed = self.confirm_stop.is_some_and(|(i, t)| {
+                            i == self.sel_job && t.elapsed() < Duration::from_secs(5)
+                        });
                         let b = if armed {
-                            band_button("stop", Lucide::Square, "Ещё раз — остановить", p.loss, rgb(0xFFFFFF).into())
+                            band_button(
+                                "stop",
+                                Lucide::Square,
+                                "Ещё раз — остановить",
+                                p.loss,
+                                rgb(0xFFFFFF).into(),
+                            )
                         } else {
                             band_button("stop", Lucide::Square, "Остановить", p.raised, p.loss)
                         };
@@ -1471,10 +1974,13 @@ impl Studio {
                         })))
                     })
                     .when(!running, |d| {
-                        d.child(band_button("restart", Lucide::RotateCcw, "Перезапустить", p.ink, p.bg).on_click(cx.listener(|this, _, _, cx| {
-                            this.restart(this.sel_job);
-                            cx.notify();
-                        })))
+                        d.child(
+                            band_button("restart", Lucide::RotateCcw, "Перезапустить", p.ink, p.bg)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.restart(this.sel_job);
+                                    cx.notify();
+                                })),
+                        )
                     }),
             );
 
@@ -1488,12 +1994,26 @@ impl Studio {
             .child(
                 v_flex()
                     .child(small_caps("F1 последней сцены", p.muted))
-                    .child(div().font_family(DISPLAY).font_weight(FontWeight::BOLD).text_size(px(64.)).line_height(px(64.)).font_features(tnum()).text_color(p.ink).child(fmt(score))),
+                    .child(
+                        div()
+                            .font_family(DISPLAY)
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(64.))
+                            .line_height(px(64.))
+                            .font_features(tnum())
+                            .text_color(p.ink)
+                            .child(fmt(score)),
+                    ),
             )
             .child(
                 v_flex()
                     .gap_1()
-                    .child(stat_line("Линия вылета", line.map_or("—".into(), |l| format!("{l:.4}")), p.ink, p))
+                    .child(stat_line(
+                        "Линия вылета",
+                        line.map_or("—".into(), |l| format!("{l:.4}")),
+                        p.ink,
+                        p,
+                    ))
                     .child(stat_line(
                         "Отрыв",
                         diff.map_or("—".into(), |d| format!("{d:+.4}")),
@@ -1509,10 +2029,23 @@ impl Studio {
             .child(
                 v_flex()
                     .gap_1()
-                    .when_some(j.scene_progress, |d, (k, n)| d.child(stat_line("Сцена", format!("{k} из {n}"), p.ink, p)))
-                    .when_some(patches, |d, (i, n)| d.child(stat_line("Патчи", format!("{i} из {n}"), p.ink, p)))
-                    .when(total > 1, |d| d.child(stat_line("Посчитано сцен", format!("{done} из {total}"), p.ink, p)))
-                    .when(j.scene_progress.is_none() && patches.is_none(), |d| d.child(stat_line("Сцена", "—".into(), p.ink, p))),
+                    .when_some(j.scene_progress, |d, (k, n)| {
+                        d.child(stat_line("Сцена", format!("{k} из {n}"), p.ink, p))
+                    })
+                    .when_some(patches, |d, (i, n)| {
+                        d.child(stat_line("Патчи", format!("{i} из {n}"), p.ink, p))
+                    })
+                    .when(total > 1, |d| {
+                        d.child(stat_line(
+                            "Посчитано сцен",
+                            format!("{done} из {total}"),
+                            p.ink,
+                            p,
+                        ))
+                    })
+                    .when(j.scene_progress.is_none() && patches.is_none(), |d| {
+                        d.child(stat_line("Сцена", "—".into(), p.ink, p))
+                    }),
             )
             .child(div().flex_1())
             .child(
@@ -1520,7 +2053,12 @@ impl Studio {
                     .items_end()
                     .gap_1()
                     .child(stat_line("Идёт", elapsed, p.ink, p))
-                    .child(stat_line("Сцена", last.as_ref().map_or("—".into(), |(n, _)| n.clone()), p.muted, p)),
+                    .child(stat_line(
+                        "Сцена",
+                        last.as_ref().map_or("—".into(), |(n, _)| n.clone()),
+                        p.muted,
+                        p,
+                    )),
             );
 
         // Таблица сцен: как «Таблица тура», только строки — сцены, а не trials.
@@ -1534,8 +2072,18 @@ impl Studio {
             .border_1()
             .border_color(p.rule)
             .overflow_y_scrollbar()
-            .child(div().px_4().pt_4().pb_2().child(display("Сцены", 22., p.ink)))
-            .child(scene_row(["#", "Сцена", "F1", "Точ.", "Полн."].map(String::from), true, p));
+            .child(
+                div()
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
+                    .child(display("Сцены", 22., p.ink)),
+            )
+            .child(scene_row(
+                ["#", "Сцена", "F1", "Точ.", "Полн."].map(String::from),
+                true,
+                p,
+            ));
         for (i, (name, m)) in scenes.iter().enumerate() {
             table = table.child(
                 scene_row(
@@ -1549,8 +2097,12 @@ impl Studio {
                     false,
                     p,
                 )
-                .when(m.baseline.is_some_and(|b| m.f1 >= b + MARGIN), |d| d.text_color(p.win).font_weight(FontWeight::SEMIBOLD))
-                .when(m.baseline.is_some_and(|b| m.f1 < b + MARGIN), |d| d.text_color(p.loss)),
+                .when(m.baseline.is_some_and(|b| m.f1 >= b + MARGIN), |d| {
+                    d.text_color(p.win).font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(m.baseline.is_some_and(|b| m.f1 < b + MARGIN), |d| {
+                    d.text_color(p.loss)
+                }),
             );
         }
         if scenes.is_empty() {
@@ -1561,7 +2113,11 @@ impl Studio {
             }));
         }
 
-        let pts: Vec<(u32, f64)> = scenes.iter().enumerate().map(|(i, (_, m))| (i as u32 + 1, m.f1)).collect();
+        let pts: Vec<(u32, f64)> = scenes
+            .iter()
+            .enumerate()
+            .map(|(i, (_, m))| (i as u32 + 1, m.f1))
+            .collect();
         let chart = v_flex()
             .h(px(220.))
             .flex_shrink_0()
@@ -1570,11 +2126,25 @@ impl Studio {
             .bg(p.surface)
             .border_1()
             .border_color(p.rule)
-            .child(chart_title("F1 по сценам · у каждой сцены свой baseline", None, p))
+            .child(chart_title(
+                "F1 по сценам · у каждой сцены свой baseline",
+                None,
+                p,
+            ))
             .child(if pts.is_empty() {
-                div().flex_1().text_color(p.muted).child("График появится после первой сцены.").into_any_element()
+                div()
+                    .flex_1()
+                    .text_color(p.muted)
+                    .child("График появится после первой сцены.")
+                    .into_any_element()
             } else {
-                f1_chart("live-scenes", pts, None, None, if dark { p.live } else { p.live_ink })
+                f1_chart(
+                    "live-scenes",
+                    pts,
+                    None,
+                    None,
+                    if dark { p.live } else { p.live_ink },
+                )
             });
 
         let log = v_flex()
@@ -1586,51 +2156,67 @@ impl Studio {
                     .gap_2()
                     .child(small_caps("Лента событий", p.muted))
                     .when(dropped > 0, |d| {
-                        d.child(div().text_xs().text_color(p.muted).child(format!("в памяти последние {n_lines} строк — полный лог в файле")))
+                        d.child(div().text_xs().text_color(p.muted).child(format!(
+                            "в памяти последние {n_lines} строк — полный лог в файле"
+                        )))
                     })
                     .child(div().flex_1())
-                    .child(choice("auto", "Автопрокрутка", autoscroll).on_click(cx.listener(|this, _, _, cx| {
-                        this.autoscroll = !this.autoscroll;
-                        cx.notify();
-                    }))),
+                    .child(
+                        choice("auto", "Автопрокрутка", autoscroll).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.autoscroll = !this.autoscroll;
+                                cx.notify();
+                            },
+                        )),
+                    ),
             )
             .child(
-                div().flex_1().min_h_0().rounded_xl().bg(p.surface).border_1().border_color(p.rule).p_3().child(
-                    uniform_list(
-                        "log",
-                        n_lines,
-                        cx.processor(move |this, range: std::ops::Range<usize>, _, _| {
-                            let p = pal(dark);
-                            let out = this.jobs[this.sel_job].out.lock().unwrap();
-                            range
-                                .filter_map(|i| out.lines.get(i).map(|l| (i, l)))
-                                .map(|(i, l)| {
-                                    let bad = ["Error", "ERROR", "Traceback", "exception"].iter().any(|k| l.contains(k));
-                                    let score = l.contains(" F1=");
-                                    div()
-                                        .id(i)
-                                        .h(px(LINE_H))
-                                        .whitespace_nowrap()
-                                        .text_color(if bad {
-                                            p.loss
-                                        } else if l.starts_with("===") || l.starts_with('$') {
-                                            p.win
-                                        } else if score {
-                                            p.ink
-                                        } else {
-                                            p.muted
-                                        })
-                                        .when(score, |d| d.font_weight(FontWeight::BOLD))
-                                        .child(l.clone())
-                                })
-                                .collect()
-                        }),
-                    )
-                    .track_scroll(&self.log_scroll)
-                    .size_full()
-                    .font_family(MONO)
-                    .text_xs(),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .rounded_xl()
+                    .bg(p.surface)
+                    .border_1()
+                    .border_color(p.rule)
+                    .p_3()
+                    .child(
+                        uniform_list(
+                            "log",
+                            n_lines,
+                            cx.processor(move |this, range: std::ops::Range<usize>, _, _| {
+                                let p = pal(dark);
+                                let out = this.jobs[this.sel_job].out.lock().unwrap();
+                                range
+                                    .filter_map(|i| out.lines.get(i).map(|l| (i, l)))
+                                    .map(|(i, l)| {
+                                        let bad = ["Error", "ERROR", "Traceback", "exception"]
+                                            .iter()
+                                            .any(|k| l.contains(k));
+                                        let score = l.contains(" F1=");
+                                        div()
+                                            .id(i)
+                                            .h(px(LINE_H))
+                                            .whitespace_nowrap()
+                                            .text_color(if bad {
+                                                p.loss
+                                            } else if l.starts_with("===") || l.starts_with('$') {
+                                                p.win
+                                            } else if score {
+                                                p.ink
+                                            } else {
+                                                p.muted
+                                            })
+                                            .when(score, |d| d.font_weight(FontWeight::BOLD))
+                                            .child(l.clone())
+                                    })
+                                    .collect()
+                            }),
+                        )
+                        .track_scroll(&self.log_scroll)
+                        .size_full()
+                        .font_family(MONO)
+                        .text_xs(),
+                    ),
             );
 
         v_flex()
@@ -1645,7 +2231,15 @@ impl Studio {
                     .pt_3()
                     .pb_6()
                     .gap_3()
-                    .child(v_flex().flex_1().min_w_0().h_full().gap_3().child(chart).child(log))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .gap_3()
+                            .child(chart)
+                            .child(log),
+                    )
                     .child(table),
             )
             .into_any_element()
@@ -1653,7 +2247,11 @@ impl Studio {
 
     fn render_live(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
         let Some(j) = self.jobs.get(self.sel_job) else {
-            let last = self.runs.iter().filter(|r| r.best_f1().is_some()).max_by(|a, b| a.best_f1().unwrap().total_cmp(&b.best_f1().unwrap()));
+            let last = self
+                .runs
+                .iter()
+                .filter(|r| r.best_f1().is_some())
+                .max_by(|a, b| a.best_f1().unwrap().total_cmp(&b.best_f1().unwrap()));
             return v_flex()
                 .size_full()
                 .justify_center()
@@ -1695,7 +2293,12 @@ impl Studio {
         let standings = j.standings();
         let best = standings.first().map(|r| r.1);
         let last_trial = last.map(|e| e.trial);
-        let pts: Vec<(u32, f64)> = j.epochs.iter().filter(|e| Some(e.trial) == last_trial).map(|e| (e.epoch, e.f1)).collect();
+        let pts: Vec<(u32, f64)> = j
+            .epochs
+            .iter()
+            .filter(|e| Some(e.trial) == last_trial)
+            .map(|e| (e.epoch, e.f1))
+            .collect();
         let (n, dropped) = {
             let out = j.out.lock().unwrap();
             (out.lines.len(), out.dropped)
@@ -1705,34 +2308,58 @@ impl Studio {
 
         // Шапка матча: карточка с оттенком цвета класса.
         let header = class_card(band, p)
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .child(display(&j.run, 34., p.ink))
-                    .child(div().text_sm().child(format!(
-                        "{} · {}{}",
-                        if j.setup { "Окружение Python" } else { class_ru(&j.target) },
-                        if j.features.is_empty() { "—" } else { &j.features },
-                        if j.run != j.title { format!(" · сценарий {}", j.title) } else { String::new() }
-                    ))),
-            )
+            .child(v_flex().min_w_0().child(display(&j.run, 34., p.ink)).child(
+                div().text_sm().child(format!(
+                    "{} · {}{}",
+                    if j.setup {
+                        "Окружение Python"
+                    } else {
+                        class_ru(&j.target)
+                    },
+                    if j.features.is_empty() {
+                        "—"
+                    } else {
+                        &j.features
+                    },
+                    if j.run != j.title {
+                        format!(" · сценарий {}", j.title)
+                    } else {
+                        String::new()
+                    }
+                )),
+            ))
             .child(chip(label, chip_bg, chip_fg, running))
             .child(div().flex_1())
             .child(
                 h_flex()
                     .gap_2()
-                    .child(band_button("copy", Lucide::Copy, "Копировать лог", p.raised, p.ink).on_click(cx.listener(|this, _, _, cx| {
-                        let text = this.jobs[this.sel_job].out.lock().unwrap().lines.join("\n");
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    })))
+                    .child(
+                        band_button("copy", Lucide::Copy, "Копировать лог", p.raised, p.ink)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let text =
+                                    this.jobs[this.sel_job].out.lock().unwrap().lines.join("\n");
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            })),
+                    )
                     .when_some(j.log_path.clone(), |d, path| {
-                        d.child(band_button("log-file", Lucide::FileText, "Файл лога", p.raised, p.ink).on_click(move |_, _, _| open_path(&path)))
+                        d.child(
+                            band_button("log-file", Lucide::FileText, "Файл лога", p.raised, p.ink)
+                                .on_click(move |_, _, _| open_path(&path)),
+                        )
                     })
                     .when(running, |d| {
                         // Двойное нажатие: прогон идёт часами, случайный клик не должен его убить.
-                        let armed = self.confirm_stop.is_some_and(|(i, t)| i == self.sel_job && t.elapsed() < Duration::from_secs(5));
+                        let armed = self.confirm_stop.is_some_and(|(i, t)| {
+                            i == self.sel_job && t.elapsed() < Duration::from_secs(5)
+                        });
                         let b = if armed {
-                            band_button("stop", Lucide::Square, "Ещё раз — остановить", p.loss, rgb(0xFFFFFF).into())
+                            band_button(
+                                "stop",
+                                Lucide::Square,
+                                "Ещё раз — остановить",
+                                p.loss,
+                                rgb(0xFFFFFF).into(),
+                            )
                         } else {
                             band_button("stop", Lucide::Square, "Остановить", p.raised, p.loss)
                         };
@@ -1749,10 +2376,13 @@ impl Studio {
                         })))
                     })
                     .when(!running, |d| {
-                        d.child(band_button("restart", Lucide::RotateCcw, "Перезапустить", p.ink, p.bg).on_click(cx.listener(|this, _, _, cx| {
-                            this.restart(this.sel_job);
-                            cx.notify();
-                        })))
+                        d.child(
+                            band_button("restart", Lucide::RotateCcw, "Перезапустить", p.ink, p.bg)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.restart(this.sel_job);
+                                    cx.notify();
+                                })),
+                        )
                     }),
             );
 
@@ -1767,13 +2397,34 @@ impl Studio {
             .items_end()
             .child(
                 v_flex()
-                    .child(small_caps(if running { "F1 сейчас" } else { "F1 последней эпохи" }, p.muted))
-                    .child(div().font_family(DISPLAY).font_weight(FontWeight::BOLD).text_size(px(64.)).line_height(px(64.)).font_features(tnum()).text_color(p.ink).child(fmt(score))),
+                    .child(small_caps(
+                        if running {
+                            "F1 сейчас"
+                        } else {
+                            "F1 последней эпохи"
+                        },
+                        p.muted,
+                    ))
+                    .child(
+                        div()
+                            .font_family(DISPLAY)
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(64.))
+                            .line_height(px(64.))
+                            .font_features(tnum())
+                            .text_color(p.ink)
+                            .child(fmt(score)),
+                    ),
             )
             .child(
                 v_flex()
                     .gap_1()
-                    .child(stat_line("Линия вылета", line.map_or("—".into(), |l| format!("{l:.4}")), p.ink, p))
+                    .child(stat_line(
+                        "Линия вылета",
+                        line.map_or("—".into(), |l| format!("{l:.4}")),
+                        p.ink,
+                        p,
+                    ))
                     .child(stat_line(
                         "Отрыв",
                         diff.map_or("—".into(), |d| format!("{d:+.4}")),
@@ -1789,8 +2440,20 @@ impl Studio {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(stat_line("Тур (trial)", last.map_or("—".into(), |e| format!("{} из {}", j.trial_in_run(e.trial), j.n_trials)), p.ink, p))
-                    .child(stat_line("Эпоха", last.map_or("—".into(), |e| format!("{} из {}", e.epoch, j.n_epochs)), p.ink, p)),
+                    .child(stat_line(
+                        "Тур (trial)",
+                        last.map_or("—".into(), |e| {
+                            format!("{} из {}", j.trial_in_run(e.trial), j.n_trials)
+                        }),
+                        p.ink,
+                        p,
+                    ))
+                    .child(stat_line(
+                        "Эпоха",
+                        last.map_or("—".into(), |e| format!("{} из {}", e.epoch, j.n_epochs)),
+                        p.ink,
+                        p,
+                    )),
             )
             .child(div().flex_1())
             .child(
@@ -1798,7 +2461,14 @@ impl Studio {
                     .items_end()
                     .gap_1()
                     .child(stat_line("Идёт", hms(j.elapsed()), p.ink, p))
-                    .when(running, |d| d.child(stat_line("Осталось ≤", j.eta().map_or("—".into(), hms), p.live_ink, p))),
+                    .when(running, |d| {
+                        d.child(stat_line(
+                            "Осталось ≤",
+                            j.eta().map_or("—".into(), hms),
+                            p.live_ink,
+                            p,
+                        ))
+                    }),
             );
 
         // Таблица тура: trials по убыванию F1, линия вылета, полосы длительности.
@@ -1812,8 +2482,18 @@ impl Studio {
             .border_1()
             .border_color(p.rule)
             .overflow_y_scrollbar()
-            .child(div().px_4().pt_4().pb_2().child(display("Таблица тура", 22., p.ink)))
-            .child(trow(["#", "Trial", "F1", "Эп.", "Время"].map(String::from), true, p));
+            .child(
+                div()
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
+                    .child(display("Таблица тура", 22., p.ink)),
+            )
+            .child(trow(
+                ["#", "Trial", "F1", "Эп.", "Время"].map(String::from),
+                true,
+                p,
+            ));
         let mut line_drawn = line.is_none();
         for (pos, (trial, f1, ep, secs)) in standings.iter().enumerate() {
             if !line_drawn && Some(*f1) < line {
@@ -1821,17 +2501,37 @@ impl Studio {
                 line_drawn = true;
             }
             table = table.child(
-                trow([format!("{}", pos + 1), format!("{trial}"), format!("{f1:.4}"), format!("{ep}"), hms(Duration::from_secs_f64(*secs))], false, p)
-                    .when(line.is_some_and(|l| *f1 >= l), |d| d.text_color(p.win).font_weight(FontWeight::SEMIBOLD))
-                    .when(Some(*trial) == last_trial && running, |d| d.bg(p.live.opacity(0.18)))
-                    .child(duration_bar(*secs, max_secs, p)),
+                trow(
+                    [
+                        format!("{}", pos + 1),
+                        format!("{trial}"),
+                        format!("{f1:.4}"),
+                        format!("{ep}"),
+                        hms(Duration::from_secs_f64(*secs)),
+                    ],
+                    false,
+                    p,
+                )
+                .when(line.is_some_and(|l| *f1 >= l), |d| {
+                    d.text_color(p.win).font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(Some(*trial) == last_trial && running, |d| {
+                    d.bg(p.live.opacity(0.18))
+                })
+                .child(duration_bar(*secs, max_secs, p)),
             );
         }
         if !line_drawn && !standings.is_empty() {
             table = table.child(relegation(p));
         }
         if standings.is_empty() {
-            table = table.child(div().px_4().py_2().text_color(p.muted).child("Первая эпоха ещё не закончилась."));
+            table = table.child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_color(p.muted)
+                    .child("Первая эпоха ещё не закончилась."),
+            );
         }
 
         let chart = v_flex()
@@ -1842,69 +2542,102 @@ impl Studio {
             .bg(p.surface)
             .border_1()
             .border_color(p.rule)
-            .child(chart_title(&format!("F1 по эпохам · trial {}", last_trial.map_or("—".into(), |t| t.to_string())), line, p))
+            .child(chart_title(
+                &format!(
+                    "F1 по эпохам · trial {}",
+                    last_trial.map_or("—".into(), |t| t.to_string())
+                ),
+                line,
+                p,
+            ))
             .child(if pts.is_empty() {
-                div().flex_1().text_color(p.muted).child("График появится после первой эпохи.").into_any_element()
+                div()
+                    .flex_1()
+                    .text_color(p.muted)
+                    .child("График появится после первой эпохи.")
+                    .into_any_element()
             } else {
-                f1_chart("live-epochs", pts, line, None, if self.dark { p.live } else { p.live_ink })
+                f1_chart(
+                    "live-epochs",
+                    pts,
+                    line,
+                    None,
+                    if self.dark { p.live } else { p.live_ink },
+                )
             });
 
         let dark = self.dark;
-        let log = v_flex()
-            .flex_1()
-            .min_h_0()
-            .gap_2()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(small_caps("Лента событий", p.muted))
-                    .when(dropped > 0, |d| {
-                        d.child(div().text_xs().text_color(p.muted).child(format!("в памяти последние {n} строк — полный лог в файле")))
-                    })
-                    .child(div().flex_1())
-                    .child(choice("auto", "Автопрокрутка", self.autoscroll).on_click(cx.listener(|this, _, _, cx| {
-                        this.autoscroll = !this.autoscroll;
-                        cx.notify();
-                    }))),
-            )
-            .child(
-                div().flex_1().min_h_0().rounded_xl().bg(p.surface).border_1().border_color(p.rule).p_3().child(
-                    uniform_list(
-                        "log",
-                        n,
-                        cx.processor(move |this, range: std::ops::Range<usize>, _, _| {
-                            let p = pal(dark);
-                            let out = this.jobs[this.sel_job].out.lock().unwrap();
-                            range
-                                .filter_map(|i| out.lines.get(i).map(|l| (i, l)))
-                                .map(|(i, l)| {
-                                    let bad = ["Error", "ERROR", "Traceback", "exception"].iter().any(|k| l.contains(k));
-                                    let epoch = l.contains(" F1=");
-                                    div()
-                                        .id(i)
-                                        .h(px(LINE_H))
-                                        .whitespace_nowrap()
-                                        .text_color(if bad {
-                                            p.loss
-                                        } else if l.starts_with("===") || l.starts_with('$') {
-                                            p.win
-                                        } else if epoch {
-                                            p.ink
-                                        } else {
-                                            p.muted
+        let log =
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(small_caps("Лента событий", p.muted))
+                        .when(dropped > 0, |d| {
+                            d.child(div().text_xs().text_color(p.muted).child(format!(
+                                "в памяти последние {n} строк — полный лог в файле"
+                            )))
+                        })
+                        .child(div().flex_1())
+                        .child(choice("auto", "Автопрокрутка", self.autoscroll).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.autoscroll = !this.autoscroll;
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .rounded_xl()
+                        .bg(p.surface)
+                        .border_1()
+                        .border_color(p.rule)
+                        .p_3()
+                        .child(
+                            uniform_list(
+                                "log",
+                                n,
+                                cx.processor(move |this, range: std::ops::Range<usize>, _, _| {
+                                    let p = pal(dark);
+                                    let out = this.jobs[this.sel_job].out.lock().unwrap();
+                                    range
+                                        .filter_map(|i| out.lines.get(i).map(|l| (i, l)))
+                                        .map(|(i, l)| {
+                                            let bad = ["Error", "ERROR", "Traceback", "exception"]
+                                                .iter()
+                                                .any(|k| l.contains(k));
+                                            let epoch = l.contains(" F1=");
+                                            div()
+                                                .id(i)
+                                                .h(px(LINE_H))
+                                                .whitespace_nowrap()
+                                                .text_color(if bad {
+                                                    p.loss
+                                                } else if l.starts_with("===") || l.starts_with('$')
+                                                {
+                                                    p.win
+                                                } else if epoch {
+                                                    p.ink
+                                                } else {
+                                                    p.muted
+                                                })
+                                                .when(epoch, |d| d.font_weight(FontWeight::BOLD))
+                                                .child(l.clone())
                                         })
-                                        .when(epoch, |d| d.font_weight(FontWeight::BOLD))
-                                        .child(l.clone())
-                                })
-                                .collect()
-                        }),
-                    )
-                    .track_scroll(&self.log_scroll)
-                    .size_full()
-                    .font_family(MONO)
-                    .text_xs(),
-                ),
-            );
+                                        .collect()
+                                }),
+                            )
+                            .track_scroll(&self.log_scroll)
+                            .size_full()
+                            .font_family(MONO)
+                            .text_xs(),
+                        ),
+                );
 
         v_flex()
             .size_full()
@@ -1922,7 +2655,15 @@ impl Studio {
                             .pt_3()
                             .pb_6()
                             .gap_3()
-                            .child(v_flex().flex_1().min_w_0().h_full().gap_3().child(chart).child(log))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .gap_3()
+                                    .child(chart)
+                                    .child(log),
+                            )
                             .child(table),
                     )
                 }
@@ -1938,25 +2679,54 @@ impl Studio {
     /// иначе датасет проекта, где есть первая сцена валидации.
     fn val_scenes(&self, r: &Run) -> Result<Vec<PathBuf>, String> {
         let split = r.split.as_ref().ok_or("нет split.json")?;
-        let names: Vec<String> = split["val"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        let names: Vec<String> = split["val"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         let first = names.first().ok_or("в split.json нет сцен валидации")?;
-        let data = split["data_dir"].as_str().map(PathBuf::from).unwrap_or_default();
+        let data = split["data_dir"]
+            .as_str()
+            .map(PathBuf::from)
+            .unwrap_or_default();
         // shortcut: из датасетов проекта берётся тот, где эта сцена крупнее всего (исходник, а не прореженная копия);
         // если прореженная копия окажется единственной, метрики будут по ней — каталог показан в карточке.
-        let mut local: Vec<(u64, PathBuf)> = self.datasets.iter().filter_map(|d| Some((std::fs::metadata(d.path.join(first)).ok()?.len(), d.path.clone()))).collect();
+        let mut local: Vec<(u64, PathBuf)> = self
+            .datasets
+            .iter()
+            .filter_map(|d| {
+                Some((
+                    std::fs::metadata(d.path.join(first)).ok()?.len(),
+                    d.path.clone(),
+                ))
+            })
+            .collect();
         local.sort_by(|a, b| b.0.cmp(&a.0));
-        let dir = [self.root.join(&data), self.root.join(data.file_name().unwrap_or_default())]
-            .into_iter()
-            .chain(local.into_iter().map(|d| d.1))
-            .find(|d| d.join(first).is_file())
-            .ok_or_else(|| format!("сцен валидации ({first} …) нет на этом компьютере — нужен каталог {}", show_path(&data)))?;
+        let dir = [
+            self.root.join(&data),
+            self.root.join(data.file_name().unwrap_or_default()),
+        ]
+        .into_iter()
+        .chain(local.into_iter().map(|d| d.1))
+        .find(|d| d.join(first).is_file())
+        .ok_or_else(|| {
+            format!(
+                "сцен валидации ({first} …) нет на этом компьютере — нужен каталог {}",
+                show_path(&data)
+            )
+        })?;
         Ok(names.iter().map(|n| dir.join(n)).collect())
     }
 
     /// predict_scene.py по всем сценам валидации лучшим trial: предсказания (их же откроет 3D) и scenes__trial<N>.json.
     fn evaluate_scenes(&mut self, idx: usize, cx: &mut Context<Self>) {
         let r = &self.runs[idx];
-        let Some(trial) = r.best.as_ref().and_then(|b| b.get("best_trial")?.as_u64()) else { return };
+        let Some(trial) = r.best.as_ref().and_then(|b| b.get("best_trial")?.as_u64()) else {
+            return;
+        };
         let scenes = match self.val_scenes(r) {
             Ok(s) => s,
             Err(e) => {
@@ -1969,12 +2739,22 @@ impl Studio {
             return;
         }
         let checkpoint = r.path.join(format!("trial_{trial:04}")).join("best.pt");
-        let mut args: Vec<String> = ["-u", "predict_scene.py", "--checkpoint"].map(String::from).to_vec();
+        let mut args: Vec<String> = ["-u", "predict_scene.py", "--checkpoint"]
+            .map(String::from)
+            .to_vec();
         args.push(checkpoint.to_string_lossy().into_owned());
         args.push("--scene".into());
         args.extend(scenes.iter().map(|s| s.to_string_lossy().into_owned()));
-        args.extend(["--out-dir".into(), r.path.join("pred").to_string_lossy().into_owned(), "--tag".into(), format!("trial{trial}")]);
-        let (title, python) = (format!("Оценка по сценам · {}", r.name), self.python.read(cx).value().trim().to_string());
+        args.extend([
+            "--out-dir".into(),
+            r.path.join("pred").to_string_lossy().into_owned(),
+            "--tag".into(),
+            format!("trial{trial}"),
+        ]);
+        let (title, python) = (
+            format!("Оценка по сценам · {}", r.name),
+            self.python.read(cx).value().trim().to_string(),
+        );
         let target = self.runs[idx].target().unwrap_or_default();
         let tab = self.tab;
         self.tab_error = None;
@@ -1988,7 +2768,11 @@ impl Studio {
 
     /// Сцена из таблицы оценки — в 3D-превью «Датасетов», сразу с ошибками модели этого прогона.
     fn open_scene_errors(&mut self, scene: PathBuf, run: String, cx: &mut Context<Self>) {
-        if let Some(i) = self.datasets.iter().position(|d| scene.starts_with(&d.path)) {
+        if let Some(i) = self
+            .datasets
+            .iter()
+            .position(|d| scene.starts_with(&d.path))
+        {
             self.sel_dataset = i;
         }
         self.open_preview(scene.clone(), cx);
@@ -2006,20 +2790,42 @@ impl Studio {
         let runs = self.runs.iter().enumerate().filter_map(|(i, r)| {
             let key = format!("run-{}", r.name);
             let trial = r.best.as_ref()?.get("best_trial")?.as_u64()?;
-            Some(TestModel { tag: format!("{key}-trial{trial}"), key, label: r.name.clone(), file: model_file(r)?, run: Some(i) })
+            Some(TestModel {
+                tag: format!("{key}-trial{trial}"),
+                key,
+                label: r.name.clone(),
+                file: model_file(r)?,
+                run: Some(i),
+            })
         });
         let files = self.imported.iter().map(|f| {
-            let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let stem = f
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let key = format!("file-{stem}");
-            TestModel { tag: key.clone(), key, label: stem, file: f.clone(), run: None }
+            TestModel {
+                tag: key.clone(),
+                key,
+                label: stem,
+                file: f.clone(),
+                run: None,
+            }
         });
         runs.chain(files).collect()
     }
 
     /// Выбранная модель (по ключу; иначе первая) и датасет теста (по имени; иначе первый).
     fn test_pick<'a>(&self, models: &'a [TestModel]) -> (Option<&'a TestModel>, Option<&Dataset>) {
-        let m = models.iter().find(|m| Some(&m.key) == self.test_model.as_ref()).or(models.first());
-        let d = self.datasets.iter().find(|d| Some(&d.name) == self.test_dataset.as_ref()).or(self.datasets.first());
+        let m = models
+            .iter()
+            .find(|m| Some(&m.key) == self.test_model.as_ref())
+            .or(models.first());
+        let d = self
+            .datasets
+            .iter()
+            .find(|d| Some(&d.name) == self.test_dataset.as_ref())
+            .or(self.datasets.first());
         (m, d)
     }
 
@@ -2039,23 +2845,42 @@ impl Studio {
         if std::fs::read_to_string(&script).is_ok_and(|s| s.contains("model=dict(")) {
             return Ok(());
         }
-        std::fs::write(&script, PREDICT_PY).map_err(|e| format!("не удалось записать {}: {e}", show_path(&script)))
+        std::fs::write(&script, PREDICT_PY)
+            .map_err(|e| format!("не удалось записать {}: {e}", show_path(&script)))
     }
 
     fn import_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Загрузить модель (.pt)".into()) });
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Загрузить модель (.pt)".into()),
+        });
         let root = self.root.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else { return };
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
             // Копирование больших .pt — в фоне, окно не замирает.
-            let res: Vec<_> = cx.background_executor().spawn(async move { paths.iter().map(|src| import_model(&root, src)).collect() }).await;
+            let res: Vec<_> = cx
+                .background_executor()
+                .spawn(async move { paths.iter().map(|src| import_model(&root, src)).collect() })
+                .await;
             _ = this.update(cx, |this, cx| {
-                let (ok, errs): (Vec<PathBuf>, Vec<String>) = (res.iter().filter_map(|r| r.clone().ok()).collect(), res.into_iter().filter_map(Result::err).collect());
+                let (ok, errs): (Vec<PathBuf>, Vec<String>) = (
+                    res.iter().filter_map(|r| r.clone().ok()).collect(),
+                    res.into_iter().filter_map(Result::err).collect(),
+                );
                 if let Some(last) = ok.last() {
-                    this.test_model = last.file_stem().map(|s| format!("file-{}", s.to_string_lossy()));
+                    this.test_model = last
+                        .file_stem()
+                        .map(|s| format!("file-{}", s.to_string_lossy()));
                 }
                 this.test_note = Some(if errs.is_empty() {
-                    (true, format!("Загружено моделей: {}. Они лежат в {MODELS_DIR}.", ok.len()))
+                    (
+                        true,
+                        format!("Загружено моделей: {}. Они лежат в {MODELS_DIR}.", ok.len()),
+                    )
                 } else {
                     (false, format!("Не загружено: {}", errs.join("; ")))
                 });
@@ -2073,8 +2898,16 @@ impl Studio {
     /// predict_scene.py по сценам датасета: предсказания и scenes__test.json в tests/<модель>__<датасет>/.
     fn run_test(&mut self, cx: &mut Context<Self>) {
         let models = self.test_models();
-        let (Some(m), Some(d)) = self.test_pick(&models) else { return };
-        let n = self.test_scenes.read(cx).value().trim().parse::<usize>().unwrap_or(0);
+        let (Some(m), Some(d)) = self.test_pick(&models) else {
+            return;
+        };
+        let n = self
+            .test_scenes
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
         if n == 0 {
             self.test_note = Some((false, "Число сцен — целое больше нуля.".into()));
             return;
@@ -2084,15 +2917,34 @@ impl Studio {
             return;
         }
         let out = test_dir(&self.root, &m.tag, &d.name);
-        let mut args: Vec<String> = ["-u", "predict_scene.py", "--checkpoint"].map(String::from).to_vec();
+        let mut args: Vec<String> = ["-u", "predict_scene.py", "--checkpoint"]
+            .map(String::from)
+            .to_vec();
         args.push(m.file.to_string_lossy().into_owned());
         args.push("--scene".into());
-        args.extend(spread(d.scenes.len(), n).into_iter().map(|i| d.path.join(&d.scenes[i].name).to_string_lossy().into_owned()));
-        args.extend(["--out-dir".into(), out.to_string_lossy().into_owned(), "--tag".into(), "test".into()]);
-        let (title, python) = (Self::test_title(m, d), self.python.read(cx).value().trim().to_string());
+        args.extend(spread(d.scenes.len(), n).into_iter().map(|i| {
+            d.path
+                .join(&d.scenes[i].name)
+                .to_string_lossy()
+                .into_owned()
+        }));
+        args.extend([
+            "--out-dir".into(),
+            out.to_string_lossy().into_owned(),
+            "--tag".into(),
+            "test".into(),
+        ]);
+        let (title, python) = (
+            Self::test_title(m, d),
+            self.python.read(cx).value().trim().to_string(),
+        );
         // predict_scene.py не принимает --target, поэтому класс модели ставим уже запущенному процессу:
         // от него зависят цвет шапки и подпись в трансляции.
-        let target = m.run.and_then(|i| self.runs.get(i)).and_then(|r| r.target()).unwrap_or_default();
+        let target = m
+            .run
+            .and_then(|i| self.runs.get(i))
+            .and_then(|r| r.target())
+            .unwrap_or_default();
         self.test_note = None;
         self.spawn(python, args, title);
         if let Some(j) = self.jobs.last_mut() {
@@ -2102,22 +2954,48 @@ impl Studio {
     }
 
     /// Сцена из таблицы теста — в 3D-превью «Датасетов» с ошибками модели.
-    fn open_test_scene(&mut self, scene: PathBuf, pred: PathBuf, target: String, label: String, cx: &mut Context<Self>) {
-        if let Some(i) = self.datasets.iter().position(|d| scene.starts_with(&d.path)) {
+    fn open_test_scene(
+        &mut self,
+        scene: PathBuf,
+        pred: PathBuf,
+        target: String,
+        label: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(i) = self
+            .datasets
+            .iter()
+            .position(|d| scene.starts_with(&d.path))
+        {
             self.sel_dataset = i;
         }
         self.open_preview(scene.clone(), cx);
         if let Some(p) = self.preview.as_mut() {
-            p.pred = Some(PredView { label, split: None, result: None });
+            p.pred = Some(PredView {
+                label,
+                split: None,
+                result: None,
+            });
         }
-        self.load_prediction(PredJob { scene, out: pred, target }, cx);
+        self.load_prediction(
+            PredJob {
+                scene,
+                out: pred,
+                target,
+            },
+            cx,
+        );
         self.tab = Tab::Datasets;
         cx.notify();
     }
 
     fn render_influence(&self, r: &Run, p: Pal) -> Option<Div> {
         let inf = influence(r);
-        let best = r.best.as_ref().and_then(|b| b.get("best_trial")?.as_u64()).map(|t| t.to_string());
+        let best = r
+            .best
+            .as_ref()
+            .and_then(|b| b.get("best_trial")?.as_u64())
+            .map(|t| t.to_string());
         if inf.first()?.points.len() < 4 {
             return None;
         }
@@ -2130,17 +3008,30 @@ impl Studio {
                 Kind::Float(a, b) => (a, b),
                 Kind::Int(a, b) => (a as f64, b as f64),
             };
-            let (ylo, yhi) = f.points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+            let (ylo, yhi) = f
+                .points
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
             let h = 84.;
             let choice = matches!(spec.kind, Kind::Choice(_));
             let dots = f.points.iter().map(|(x, y, n)| {
                 // Поле с отступом 4 %, чтобы крайние точки не ложились на оси.
                 let fx = 0.04 + 0.92 * if hi > lo { (x - lo) / (hi - lo) } else { 0.5 };
-                let fy = 0.06 + 0.88 * if yhi > ylo { (y - ylo) / (yhi - ylo) } else { 0.5 };
+                let fy = 0.06
+                    + 0.88
+                        * if yhi > ylo {
+                            (y - ylo) / (yhi - ylo)
+                        } else {
+                            0.5
+                        };
                 let is_best = best.as_ref() == Some(n);
                 let d = if is_best { 9. } else { 6. };
                 // У вариантов все trials в одном столбике — раздвинуть по номеру trial, чтобы точки не слипались.
-                let jitter = if choice { (n.parse::<u32>().unwrap_or(0) % 5) as f32 * 3. - 6. } else { 0. };
+                let jitter = if choice {
+                    (n.parse::<u32>().unwrap_or(0) % 5) as f32 * 3. - 6.
+                } else {
+                    0.
+                };
                 div()
                     .absolute()
                     .left(relative(fx as f32))
@@ -2151,11 +3042,14 @@ impl Studio {
                     .bg(if is_best { color } else { p.muted.opacity(0.6) })
             });
             let axis = match spec.kind {
-                Kind::Choice(o) => o.iter().map(|o| match *o {
-                    "true" => "да".to_string(),
-                    "false" => "нет".to_string(),
-                    o => o.to_string(),
-                }).collect::<Vec<_>>(),
+                Kind::Choice(o) => o
+                    .iter()
+                    .map(|o| match *o {
+                        "true" => "да".to_string(),
+                        "false" => "нет".to_string(),
+                        o => o.to_string(),
+                    })
+                    .collect::<Vec<_>>(),
                 Kind::LogFloat(a, b) => vec![format!("{a:.0e}"), format!("{b:.0e}")],
                 _ => vec![format!("{lo}"), format!("{hi}")],
             };
@@ -2168,8 +3062,35 @@ impl Studio {
                 .rounded_lg()
                 .border_1()
                 .border_color(p.rule)
-                .child(h_flex().gap_2().child(div().flex_1().min_w_0().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(spec.label)).child(div().text_xs().font_features(tnum()).text_color(p.muted).child(score)))
-                .child(div().h(px(3.)).w_full().rounded_full().bg(p.rule).child(div().h_full().rounded_full().w(relative(f.score.unwrap_or(0.) as f32)).bg(color)))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(p.ink)
+                                .child(spec.label),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_features(tnum())
+                                .text_color(p.muted)
+                                .child(score),
+                        ),
+                )
+                .child(
+                    div().h(px(3.)).w_full().rounded_full().bg(p.rule).child(
+                        div()
+                            .h_full()
+                            .rounded_full()
+                            .w(relative(f.score.unwrap_or(0.) as f32))
+                            .bg(color),
+                    ),
+                )
                 .child(
                     h_flex()
                         .mt_1()
@@ -2187,9 +3108,25 @@ impl Studio {
                                 .child(format!("{yhi:.3}"))
                                 .child(format!("{ylo:.3}")),
                         )
-                        .child(div().relative().flex_1().h(px(h as f32)).border_b_1().border_l_1().border_color(p.rule).children(dots)),
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .h(px(h as f32))
+                                .border_b_1()
+                                .border_l_1()
+                                .border_color(p.rule)
+                                .children(dots),
+                        ),
                 )
-                .child(h_flex().pl(px(44.)).justify_between().text_xs().text_color(p.muted).children(axis))
+                .child(
+                    h_flex()
+                        .pl(px(44.))
+                        .justify_between()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .children(axis),
+                )
         });
         Some(
             v_flex()
@@ -2214,18 +3151,40 @@ impl Studio {
         let title = format!("Оценка по сценам · {}", r.name);
         let running = self.jobs.iter().any(|j| j.running() && j.title == title);
         let trial = r.best.as_ref().and_then(|b| b.get("best_trial")?.as_u64());
-        let has_ckpt = trial.is_some_and(|t| r.path.join(format!("trial_{t:04}")).join("best.pt").exists());
+        let has_ckpt = trial.is_some_and(|t| {
+            r.path
+                .join(format!("trial_{t:04}"))
+                .join("best.pt")
+                .exists()
+        });
         let eval = r.scene_eval.as_ref();
-        let (done, total) = eval.map_or((0, 0), |e| (e["done"].as_u64().unwrap_or(0), e["total"].as_u64().unwrap_or(0)));
+        let (done, total) = eval.map_or((0, 0), |e| {
+            (
+                e["done"].as_u64().unwrap_or(0),
+                e["total"].as_u64().unwrap_or(0),
+            )
+        });
         let scenes = self.val_scenes(r);
         let from = match &scenes {
-            Ok(s) => s.first().and_then(|f| f.parent()).map_or(String::new(), |d| format!(" Сцены берутся из {}.", show_path(d.strip_prefix(&self.root).unwrap_or(d)))),
+            Ok(s) => s
+                .first()
+                .and_then(|f| f.parent())
+                .map_or(String::new(), |d| {
+                    format!(
+                        " Сцены берутся из {}.",
+                        show_path(d.strip_prefix(&self.root).unwrap_or(d))
+                    )
+                }),
             Err(e) => format!(" {e}."),
         };
         let button = (has_ckpt && scenes.is_ok() && !running && done < total.max(1)).then(|| {
             Button::new("run-eval")
                 .icon(Icon::new(Lucide::ScanSearch))
-                .label(if eval.is_some() { "Досчитать" } else { "Оценить по сценам" })
+                .label(if eval.is_some() {
+                    "Досчитать"
+                } else {
+                    "Оценить по сценам"
+                })
                 .outline()
                 .small()
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2236,16 +3195,29 @@ impl Studio {
         let note = if !has_ckpt {
             "Нет best.pt лучшего trial — оценивать нечем.".to_string()
         } else if running {
-            format!("Идёт оценка: {done} из {} сцен, лог — в «Трансляции». Таблица пополняется по ходу.", total.max(done))
+            format!(
+                "Идёт оценка: {done} из {} сцен, лог — в «Трансляции». Таблица пополняется по ходу.",
+                total.max(done)
+            )
         } else if eval.is_none() {
-            format!("Лучший trial прогоняется по каждой сцене валидации (GPU, минуты). Худшие сцены окажутся сверху, клик откроет сцену в 3D с ошибками модели.{from}")
+            format!(
+                "Лучший trial прогоняется по каждой сцене валидации (GPU, минуты). Худшие сцены окажутся сверху, клик откроет сцену в 3D с ошибками модели.{from}"
+            )
         } else if done < total {
-            format!("Посчитано {done} из {total} сцен — оценку прервали; «Досчитать» продолжит с места остановки.")
+            format!(
+                "Посчитано {done} из {total} сцен — оценку прервали; «Досчитать» продолжит с места остановки."
+            )
         } else {
             format!("{total} сцен валидации, худшие сверху. Клик — сцена в 3D с ошибками модели.")
         };
         let run = r.name.clone();
-        let table = self.scene_table(eval, Some(r), p, cx, Rc::new(move |this, path, cx| this.open_scene_errors(path, run.clone(), cx)));
+        let table = self.scene_table(
+            eval,
+            Some(r),
+            p,
+            cx,
+            Rc::new(move |this, path, cx| this.open_scene_errors(path, run.clone(), cx)),
+        );
         v_flex()
             .mx_6()
             .mt_3()
@@ -2255,34 +3227,87 @@ impl Studio {
             .bg(p.surface)
             .border_1()
             .border_color(p.rule)
-            .child(h_flex().gap_3().child(small_caps("Где модель ошибается · сцены валидации", p.muted)).child(div().flex_1()).children(button))
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(small_caps(
+                        "Где модель ошибается · сцены валидации",
+                        p.muted,
+                    ))
+                    .child(div().flex_1())
+                    .children(button),
+            )
             .child(div().text_xs().text_color(p.muted).child(note))
             .children(table)
     }
 
     /// Таблица оценки по сценам (scenes__*.json от predict_scene.py --out-dir), худшие сверху.
     /// Строка красная, если F1 ниже baseline этой сцены + MARGIN: там модель не лучше «всё = 1». Клик — `open`.
-    fn scene_table(&self, eval: Option<&serde_json::Value>, run: Option<&Run>, p: Pal, cx: &mut Context<Self>, open: OpenScene) -> Option<Div> {
-        let mut rows: Vec<serde_json::Value> = eval?["scenes"].as_array().filter(|r| !r.is_empty())?.clone();
-        rows.sort_by(|a, b| a["f1"].as_f64().unwrap_or(0.).total_cmp(&b["f1"].as_f64().unwrap_or(0.)));
-        let mut table = v_flex().child(trow(["#", "Сцена", "Выборка", "F1", "Precision", "Recall", "Класс", "Не покрыто"].map(String::from), true, p).px_0());
+    fn scene_table(
+        &self,
+        eval: Option<&serde_json::Value>,
+        run: Option<&Run>,
+        p: Pal,
+        cx: &mut Context<Self>,
+        open: OpenScene,
+    ) -> Option<Div> {
+        let mut rows: Vec<serde_json::Value> = eval?["scenes"]
+            .as_array()
+            .filter(|r| !r.is_empty())?
+            .clone();
+        rows.sort_by(|a, b| {
+            a["f1"]
+                .as_f64()
+                .unwrap_or(0.)
+                .total_cmp(&b["f1"].as_f64().unwrap_or(0.))
+        });
+        let mut table = v_flex().child(
+            trow(
+                [
+                    "#",
+                    "Сцена",
+                    "Выборка",
+                    "F1",
+                    "Precision",
+                    "Recall",
+                    "Класс",
+                    "Не покрыто",
+                ]
+                .map(String::from),
+                true,
+                p,
+            )
+            .px_0(),
+        );
         for (i, s) in rows.iter().enumerate() {
             let f1 = s["f1"].as_f64();
             let line = s["baseline_f1"].as_f64().map(|b| b + MARGIN);
-            let share = s["val_positive_points"].as_f64().unwrap_or(0.) / s["points"].as_f64().unwrap_or(0.).max(1.);
+            let share = s["val_positive_points"].as_f64().unwrap_or(0.)
+                / s["points"].as_f64().unwrap_or(0.).max(1.);
             let name = s["scene"].as_str().unwrap_or("?").to_string();
             let path = PathBuf::from(s["path"].as_str().unwrap_or_default());
             let open = open.clone();
             table = table.child(
                 trow(
-                    [format!("{}", i + 1), name.clone(), scene_split(run, &name), fmt(f1), fmt(s["precision"].as_f64()), fmt(s["recall"].as_f64()), format!("{:.0} %", share * 100.), thousands(s["not_covered"].as_u64().unwrap_or(0))],
+                    [
+                        format!("{}", i + 1),
+                        name.clone(),
+                        scene_split(run, &name),
+                        fmt(f1),
+                        fmt(s["precision"].as_f64()),
+                        fmt(s["recall"].as_f64()),
+                        format!("{:.0} %", share * 100.),
+                        thousands(s["not_covered"].as_u64().unwrap_or(0)),
+                    ],
                     false,
                     p,
                 )
                 .px_0()
                 .cursor_pointer()
                 .hover(|d| d.bg(p.raised))
-                .when(f1.zip(line).is_some_and(|(f, l)| f < l), |d| d.text_color(p.loss))
+                .when(f1.zip(line).is_some_and(|(f, l)| f < l), |d| {
+                    d.text_color(p.loss)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| open(this, path.clone(), cx))),
             );
         }
@@ -2293,7 +3318,8 @@ impl Studio {
 
     /// Читает F1 по эпохам лучшего trial каждого отмеченного прогона (несколько маленьких CSV).
     fn open_compare(&mut self) {
-        self.compare.retain(|n| self.runs.iter().any(|r| r.name == *n));
+        self.compare
+            .retain(|n| self.runs.iter().any(|r| r.name == *n));
         if self.compare.len() < 2 {
             self.compare_view = None;
             return;
@@ -2304,7 +3330,10 @@ impl Studio {
             .filter_map(|n| self.runs.iter().find(|r| r.name == *n))
             .map(|r| {
                 let best = r.best.as_ref().and_then(|b| b.get("best_trial")?.as_u64());
-                (r.name.clone(), best.map_or_else(Vec::new, |t| read_epochs(&r.path, &t.to_string())))
+                (
+                    r.name.clone(),
+                    best.map_or_else(Vec::new, |t| read_epochs(&r.path, &t.to_string())),
+                )
             })
             .collect();
         self.compare_view = Some(view);
@@ -2312,23 +3341,54 @@ impl Studio {
 
     fn render_compare(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
         let view = self.compare_view.clone().unwrap_or_default();
-        let runs: Vec<&Run> = view.iter().filter_map(|(n, _)| self.runs.iter().find(|r| r.name == *n)).collect();
-        let best = |r: &Run, k: &str| r.best.as_ref().and_then(|b| b.get(k)).cloned().unwrap_or_default();
+        let runs: Vec<&Run> = view
+            .iter()
+            .filter_map(|(n, _)| self.runs.iter().find(|r| r.name == *n))
+            .collect();
+        let best = |r: &Run, k: &str| {
+            r.best
+                .as_ref()
+                .and_then(|b| b.get(k))
+                .cloned()
+                .unwrap_or_default()
+        };
         let margin = |r: &Run| r.best_f1().zip(r.baseline()).map(|(f, b)| f - b - MARGIN);
         const LABEL_W: f32 = 200.;
         const COL_W: f32 = 180.;
 
         let mut table = v_flex().min_w_0();
         // Заголовки колонок: цвет класса и имя прогона.
-        table = table.child(h_flex().px_8().py_2().border_b_1().border_color(p.rule).child(div().w(px(LABEL_W)).flex_shrink_0()).children(runs.iter().map(|r| {
-            let t = r.target().unwrap_or_default();
+        table = table.child(
             h_flex()
-                .w(px(COL_W))
-                .flex_shrink_0()
-                .gap_2()
-                .child(div().size(px(10.)).flex_shrink_0().rounded_full().bg(class_color(&t)))
-                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::SEMIBOLD).child(r.name.clone()))
-        })));
+                .px_8()
+                .py_2()
+                .border_b_1()
+                .border_color(p.rule)
+                .child(div().w(px(LABEL_W)).flex_shrink_0())
+                .children(runs.iter().map(|r| {
+                    let t = r.target().unwrap_or_default();
+                    h_flex()
+                        .w(px(COL_W))
+                        .flex_shrink_0()
+                        .gap_2()
+                        .child(
+                            div()
+                                .size(px(10.))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(class_color(&t)),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(r.name.clone()),
+                        )
+                })),
+        );
         let line = |label: &str, cells: Vec<(String, Hsla, bool)>| {
             h_flex()
                 .px_8()
@@ -2336,7 +3396,14 @@ impl Studio {
                 .border_b_1()
                 .border_color(p.rule)
                 .font_features(tnum())
-                .child(div().w(px(LABEL_W)).flex_shrink_0().text_xs().text_color(p.muted).child(label.to_string()))
+                .child(
+                    div()
+                        .w(px(LABEL_W))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(label.to_string()),
+                )
                 .children(cells.into_iter().map(|(v, color, bold)| {
                     div()
                         .w(px(COL_W))
@@ -2351,56 +3418,140 @@ impl Studio {
         };
         // Метрика: лучшее значение среди прогонов выделено.
         let metric = |label: &str, vals: Vec<Option<f64>>| {
-            let top = vals.iter().flatten().copied().fold(f64::NEG_INFINITY, f64::max);
+            let top = vals
+                .iter()
+                .flatten()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
             let many = vals.iter().flatten().count() > 1;
-            line(label, vals.iter().map(|v| (fmt(*v), if many && *v == Some(top) { p.win } else { p.ink }, many && *v == Some(top))).collect())
+            line(
+                label,
+                vals.iter()
+                    .map(|v| {
+                        (
+                            fmt(*v),
+                            if many && *v == Some(top) {
+                                p.win
+                            } else {
+                                p.ink
+                            },
+                            many && *v == Some(top),
+                        )
+                    })
+                    .collect(),
+            )
         };
         // Текст: строки, где прогоны различаются, — ярче.
         let text = |label: &str, vals: Vec<String>| {
             let differ = vals.windows(2).any(|w| w[0] != w[1]);
-            line(label, vals.into_iter().map(|v| (v, if differ { p.ink } else { p.muted }, differ)).collect())
+            line(
+                label,
+                vals.into_iter()
+                    .map(|v| (v, if differ { p.ink } else { p.muted }, differ))
+                    .collect(),
+            )
         };
         let section = |title: &str| div().px_8().pt_5().pb_1().child(small_caps(title, p.muted));
 
         table = table
             .child(section("Результат лучшего trial"))
             .child(metric("F1", runs.iter().map(|r| r.best_f1()).collect()))
-            .child(metric("Precision", runs.iter().map(|r| best(r, "precision").as_f64()).collect()))
-            .child(metric("Recall", runs.iter().map(|r| best(r, "recall").as_f64()).collect()))
-            .child(line("Baseline F1", runs.iter().map(|r| (fmt(r.baseline()), p.muted, false)).collect()))
+            .child(metric(
+                "Precision",
+                runs.iter().map(|r| best(r, "precision").as_f64()).collect(),
+            ))
+            .child(metric(
+                "Recall",
+                runs.iter().map(|r| best(r, "recall").as_f64()).collect(),
+            ))
+            .child(line(
+                "Baseline F1",
+                runs.iter()
+                    .map(|r| (fmt(r.baseline()), p.muted, false))
+                    .collect(),
+            ))
             .child(line(
                 "Запас над линией вылета",
                 runs.iter()
                     .map(|r| match margin(r) {
-                        Some(m) => (format!("{m:+.4}"), if m >= 0. { p.win } else { p.loss }, true),
+                        Some(m) => (
+                            format!("{m:+.4}"),
+                            if m >= 0. { p.win } else { p.loss },
+                            true,
+                        ),
                         None => ("—".into(), p.muted, false),
                     })
                     .collect(),
             ))
-            .child(text("Лучший trial", runs.iter().map(|r| best(r, "best_trial").to_string().replace("null", "—")).collect()))
+            .child(text(
+                "Лучший trial",
+                runs.iter()
+                    .map(|r| best(r, "best_trial").to_string().replace("null", "—"))
+                    .collect(),
+            ))
             .child(text(
                 "Trials завершено",
-                runs.iter().map(|r| format!("{} / {}", r.trials.iter().filter(|t| t.state == "COMPLETE").count(), r.trials.len())).collect(),
+                runs.iter()
+                    .map(|r| {
+                        format!(
+                            "{} / {}",
+                            r.trials.iter().filter(|t| t.state == "COMPLETE").count(),
+                            r.trials.len()
+                        )
+                    })
+                    .collect(),
             ))
             .child(section("Постановка"))
-            .child(text("Класс", runs.iter().map(|r| class_ru(&r.target().unwrap_or_default()).to_string()).collect()))
-            .child(text("Признаки", runs.iter().map(|r| r.features().unwrap_or_else(|| "—".into())).collect()))
+            .child(text(
+                "Класс",
+                runs.iter()
+                    .map(|r| class_ru(&r.target().unwrap_or_default()).to_string())
+                    .collect(),
+            ))
+            .child(text(
+                "Признаки",
+                runs.iter()
+                    .map(|r| r.features().unwrap_or_else(|| "—".into()))
+                    .collect(),
+            ))
             .child(text("Loss", runs.iter().map(|r| r.loss()).collect()));
         let show = |v: &serde_json::Value| match v {
             serde_json::Value::Null => "—".to_string(),
             serde_json::Value::String(s) if s.is_empty() => "—".into(),
-            serde_json::Value::String(s) => Path::new(s).file_name().map_or(s.clone(), |n| n.to_string_lossy().into_owned()),
+            serde_json::Value::String(s) => Path::new(s)
+                .file_name()
+                .map_or(s.clone(), |n| n.to_string_lossy().into_owned()),
             serde_json::Value::Number(n) if n.is_f64() => {
                 let f = n.as_f64().unwrap_or_default();
-                if f != 0. && f.abs() < 0.01 { format!("{f:.2e}") } else { format!("{f:.4}").trim_end_matches('0').trim_end_matches('.').to_string() }
+                if f != 0. && f.abs() < 0.01 {
+                    format!("{f:.2e}")
+                } else {
+                    format!("{f:.4}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string()
+                }
             }
             v => v.to_string(),
         };
-        for (k, label) in [("epochs", "Эпох"), ("patch_points", "Точек в патче"), ("patches_per_scene", "Патчей на сцену"), ("seed", "Seed"), ("data_dir", "Данные"), ("device", "Устройство")] {
-            table = table.child(text(label, runs.iter().map(|r| show(&best(r, k))).collect()));
+        for (k, label) in [
+            ("epochs", "Эпох"),
+            ("patch_points", "Точек в патче"),
+            ("patches_per_scene", "Патчей на сцену"),
+            ("seed", "Seed"),
+            ("data_dir", "Данные"),
+            ("device", "Устройство"),
+        ] {
+            table = table.child(text(
+                label,
+                runs.iter().map(|r| show(&best(r, k))).collect(),
+            ));
         }
         // Гиперпараметры: сначала в порядке SPACE, затем всё прочее из params.
-        let mut keys: Vec<(String, String)> = SPACE.iter().map(|s| (s.key.to_string(), s.label.to_string())).collect();
+        let mut keys: Vec<(String, String)> = SPACE
+            .iter()
+            .map(|s| (s.key.to_string(), s.label.to_string()))
+            .collect();
         for r in &runs {
             if let Some(o) = best(r, "params").as_object() {
                 for k in o.keys() {
@@ -2412,23 +3563,54 @@ impl Studio {
         }
         table = table.child(section("Гиперпараметры лучшего trial"));
         for (k, label) in keys {
-            table = table.child(text(&label, runs.iter().map(|r| show(&best(r, "params")[k.as_str()])).collect()));
+            table = table.child(text(
+                &label,
+                runs.iter()
+                    .map(|r| show(&best(r, "params")[k.as_str()]))
+                    .collect(),
+            ));
         }
 
         // Графики в одном масштабе: общая нижняя граница по всем точкам и линиям.
-        let floor = view.iter().flat_map(|(_, e)| e.iter().map(|x| x.1)).chain(runs.iter().filter_map(|r| r.baseline().map(|b| b + MARGIN))).fold(1.0f64, f64::min);
-        let charts = h_flex().px_8().pt_5().gap_4().flex_wrap().children(view.iter().zip(&runs).enumerate().map(|(i, ((_, pts), r))| {
-            let line = r.baseline().map(|b| b + MARGIN);
-            v_flex()
-                .w(px(320.))
-                .gap_2()
-                .child(chart_title(&format!("{} · trial {}", r.name, best(r, "best_trial")), None, p))
-                .child(if pts.is_empty() {
-                    div().h(px(160.)).text_color(p.muted).child("Нет metrics.csv лучшего trial").into_any_element()
-                } else {
-                    div().h(px(160.)).child(f1_chart(("cmp-chart", i), pts.clone(), line, Some(floor), class_color(&r.target().unwrap_or_default()))).into_any_element()
-                })
-        }));
+        let floor = view
+            .iter()
+            .flat_map(|(_, e)| e.iter().map(|x| x.1))
+            .chain(runs.iter().filter_map(|r| r.baseline().map(|b| b + MARGIN)))
+            .fold(1.0f64, f64::min);
+        let charts = h_flex().px_8().pt_5().gap_4().flex_wrap().children(
+            view.iter()
+                .zip(&runs)
+                .enumerate()
+                .map(|(i, ((_, pts), r))| {
+                    let line = r.baseline().map(|b| b + MARGIN);
+                    v_flex()
+                        .w(px(320.))
+                        .gap_2()
+                        .child(chart_title(
+                            &format!("{} · trial {}", r.name, best(r, "best_trial")),
+                            None,
+                            p,
+                        ))
+                        .child(if pts.is_empty() {
+                            div()
+                                .h(px(160.))
+                                .text_color(p.muted)
+                                .child("Нет metrics.csv лучшего trial")
+                                .into_any_element()
+                        } else {
+                            div()
+                                .h(px(160.))
+                                .child(f1_chart(
+                                    ("cmp-chart", i),
+                                    pts.clone(),
+                                    line,
+                                    Some(floor),
+                                    class_color(&r.target().unwrap_or_default()),
+                                ))
+                                .into_any_element()
+                        })
+                }),
+        );
 
         let head = h_flex()
             .px_8()
@@ -2459,14 +3641,21 @@ impl Studio {
                     .overflow_scroll()
                     .pb_8()
                     .child(table)
-                    .child(section("F1 по эпохам · общий масштаб, пунктир — линия вылета"))
+                    .child(section(
+                        "F1 по эпохам · общий масштаб, пунктир — линия вылета",
+                    ))
                     .child(charts),
             )
             .into_any_element()
     }
 
     fn render_runs(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
-        let live: Vec<String> = self.jobs.iter().filter(|j| j.running()).map(|j| j.run.clone()).collect();
+        let live: Vec<String> = self
+            .jobs
+            .iter()
+            .filter(|j| j.running())
+            .map(|j| j.run.clone())
+            .collect();
         let list = v_flex()
             .id("run-list")
             .w(px(300.))
@@ -2482,10 +3671,17 @@ impl Studio {
                     .pb_2()
                     .child(display("Прогоны", 22., p.ink))
                     .child(div().flex_1())
-                    .child(Button::new("runs-reload").icon(Icon::new(Lucide::RefreshCw)).ghost().xsmall().tooltip("Перечитать runs/").on_click(cx.listener(|this, _, _, cx| {
-                        this.reload_runs(cx);
-                        cx.notify();
-                    }))),
+                    .child(
+                        Button::new("runs-reload")
+                            .icon(Icon::new(Lucide::RefreshCw))
+                            .ghost()
+                            .xsmall()
+                            .tooltip("Перечитать runs/")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reload_runs(cx);
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(div().px_4().pb_2().child(if self.compare.len() >= 2 {
                 Button::new("runs-compare")
@@ -2500,7 +3696,11 @@ impl Studio {
                     }))
                     .into_any_element()
             } else {
-                div().text_xs().text_color(p.muted).child("Отметьте два прогона и больше, чтобы сравнить их.").into_any_element()
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child("Отметьте два прогона и больше, чтобы сравнить их.")
+                    .into_any_element()
             }))
             .children(self.runs.iter().enumerate().map(|(i, r)| {
                 let target = &r.target().unwrap_or_default();
@@ -2515,11 +3715,15 @@ impl Studio {
                     .rounded_lg()
                     .cursor_pointer()
                     .hover(|s| s.bg(p.raised))
-                    .when(i == self.sel_run && self.compare_view.is_none(), |d| d.bg(p.raised))
+                    .when(i == self.sel_run && self.compare_view.is_none(), |d| {
+                        d.bg(p.raised)
+                    })
                     .child({
                         let name = r.name.clone();
-                        Checkbox::new(("cmp", i)).checked(self.compare.contains(&r.name)).tooltip("Добавить к сравнению").on_click(cx.listener(
-                            move |this, checked: &bool, _, cx| {
+                        Checkbox::new(("cmp", i))
+                            .checked(self.compare.contains(&r.name))
+                            .tooltip("Добавить к сравнению")
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                 cx.stop_propagation();
                                 this.compare.retain(|n| *n != name);
                                 if *checked {
@@ -2529,22 +3733,44 @@ impl Studio {
                                     this.open_compare();
                                 }
                                 cx.notify();
-                            },
-                        ))
+                            }))
                     })
-                    .child(div().size(px(10.)).flex_shrink_0().rounded_full().bg(class_color(target)))
+                    .child(
+                        div()
+                            .size(px(10.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(class_color(target)),
+                    )
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(r.name.clone()))
-                            .child(div().text_xs().text_color(p.muted).child(format!("{} · trials {done}/{}", class_ru(target), r.trials.len()))),
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(p.ink)
+                                    .child(r.name.clone()),
+                            )
+                            .child(div().text_xs().text_color(p.muted).child(format!(
+                                "{} · trials {done}/{}",
+                                class_ru(target),
+                                r.trials.len()
+                            ))),
                     )
                     .child(
                         v_flex()
                             .items_end()
-                            .child(div().font_features(tnum()).font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(fmt(r.best_f1())))
-                            .when(is_live, |d| d.child(div().text_xs().text_color(p.live_ink).child("в эфире"))),
+                            .child(
+                                div()
+                                    .font_features(tnum())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(p.ink)
+                                    .child(fmt(r.best_f1())),
+                            )
+                            .when(is_live, |d| {
+                                d.child(div().text_xs().text_color(p.live_ink).child("в эфире"))
+                            }),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.sel_run = i;
@@ -2556,12 +3782,19 @@ impl Studio {
                     }))
             }))
             .when(self.runs.is_empty(), |d| {
-                d.child(div().px_4().py_2().text_color(p.muted).child(format!("В {} пока пусто. Результаты появятся после первого trial.", self.root.join("runs").display())))
+                d.child(div().px_4().py_2().text_color(p.muted).child(format!(
+                    "В {} пока пусто. Результаты появятся после первого trial.",
+                    self.root.join("runs").display()
+                )))
             });
 
         if self.compare_view.is_some() {
             let body = self.render_compare(p, cx);
-            return h_flex().size_full().child(list).child(body).into_any_element();
+            return h_flex()
+                .size_full()
+                .child(list)
+                .child(body)
+                .into_any_element();
         }
         let Some(r) = self.runs.get(self.sel_run) else {
             return h_flex().size_full().child(list).into_any_element();
@@ -2572,7 +3805,8 @@ impl Studio {
         let features = r.features().unwrap_or_else(|| "—".into());
         let baseline = r.baseline();
         // Класс и признаки известны (split.json/best.json) — только тогда можно продолжить или взять параметры.
-        let known = r.target().is_some_and(|t| TARGETS.contains(&t.as_str())) && r.features().is_some_and(|f| FEATURES.contains(&f.as_str()));
+        let known = r.target().is_some_and(|t| TARGETS.contains(&t.as_str()))
+            && r.features().is_some_and(|f| FEATURES.contains(&f.as_str()));
         let line = baseline.map(|b| b + MARGIN);
         let f1 = r.best_f1();
         let diff = f1.zip(line).map(|(f, l)| f - l);
@@ -2586,25 +3820,61 @@ impl Studio {
 
         let header = class_card(class_color(&target), p)
             .flex_wrap()
-            .child(v_flex().child(display(&r.name, 34., p.ink)).child(div().text_sm().child(format!("{} · {features} · {}", class_ru(&target), r.loss()))))
+            .child(
+                v_flex()
+                    .child(display(&r.name, 34., p.ink))
+                    .child(div().text_sm().child(format!(
+                        "{} · {features} · {}",
+                        class_ru(&target),
+                        r.loss()
+                    ))),
+            )
             .child(div().flex_1())
-            .child(icon_button("run-open", Lucide::FolderOpen, "Открыть папку прогона", p).on_click(move |_, _, _| open_path(&path)))
+            .child(
+                icon_button("run-open", Lucide::FolderOpen, "Открыть папку прогона", p)
+                    .on_click(move |_, _, _| open_path(&path)),
+            )
             .when_some(model_file(r), |d, src| {
                 let name = r.name.clone();
-                d.child(icon_button("run-save-model", Lucide::ArrowDownToLine, "Сохранить модель…", p).on_click(cx.listener(move |this, _, window, cx| {
-                    this.save_model(src.clone(), &name, window, cx)
-                })))
+                d.child(
+                    icon_button(
+                        "run-save-model",
+                        Lucide::ArrowDownToLine,
+                        "Сохранить модель…",
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.save_model(src.clone(), &name, window, cx)
+                    })),
+                )
             })
             .when_some(latest_log(&self.root, &r.name), |d, log| {
-                d.child(icon_button("run-log", Lucide::FileText, "Открыть последний лог", p).on_click(move |_, _, _| open_path(&log)))
+                d.child(
+                    icon_button("run-log", Lucide::FileText, "Открыть последний лог", p)
+                        .on_click(move |_, _, _| open_path(&log)),
+                )
             })
             .child({
                 // Двойное нажатие, как у «Остановить»: удаление прогона — часы обучения.
-                let armed = self.confirm_delete.as_ref().is_some_and(|(n, t)| *n == r.name && t.elapsed() < Duration::from_secs(5));
+                let armed = self
+                    .confirm_delete
+                    .as_ref()
+                    .is_some_and(|(n, t)| *n == r.name && t.elapsed() < Duration::from_secs(5));
                 let b = if armed {
-                    band_button("run-delete", Lucide::Trash, "Удалить?", p.loss, rgb(0xFFFFFF).into())
+                    band_button(
+                        "run-delete",
+                        Lucide::Trash,
+                        "Удалить?",
+                        p.loss,
+                        rgb(0xFFFFFF).into(),
+                    )
                 } else {
-                    icon_button("run-delete", Lucide::Trash, "Удалить в корзину (нажать дважды)", p)
+                    icon_button(
+                        "run-delete",
+                        Lucide::Trash,
+                        "Удалить в корзину (нажать дважды)",
+                        p,
+                    )
                 };
                 let name = r.name.clone();
                 b.on_click(cx.listener(move |this, _, _, cx| {
@@ -2618,37 +3888,72 @@ impl Studio {
                     }
                 }))
             })
+            .when(
+                known
+                    && r.best
+                        .as_ref()
+                        .is_some_and(|b| b.get("params").is_some_and(|p| p.is_object())),
+                |d| {
+                    d.child(
+                        band_button("run-final", Lucide::Play, "Финальный прогон", p.ink, p.bg)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_final_run(this.sel_run, cx);
+                            })),
+                    )
+                },
+            )
             .when(known, |d| {
-                d.child(band_button("run-form", Lucide::Play, "Продолжить в форме", p.ink, p.bg).on_click(cx.listener(
-                    move |this, _, window, cx| {
+                d.child(
+                    band_button("run-form", Lucide::Play, "Продолжить в форме", p.ink, p.bg)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.form_from_run(this.sel_run, window, cx);
+                            this.custom = false; // продолжение study — снова подбор Optuna
+                            let name = this.runs[this.sel_run].name.clone();
+                            Self::set_input(&this.out_name, name, window, cx);
+                            this.tab = Tab::Launch;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(known, |d| {
+                d.child(
+                    band_button(
+                        "run-edit",
+                        Lucide::SlidersHorizontal,
+                        "Параметры в редактор",
+                        p.ink,
+                        p.bg,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // Выбранный trial, иначе лучший.
+                        let r = &this.runs[this.sel_run];
+                        let from_trial = this.sel_trial.as_ref().and_then(|n| {
+                            let t = r.trials.iter().find(|t| &t.number == n)?;
+                            Some((
+                                format!("trial {n} прогона {} (F1 {})", r.name, fmt(t.f1)),
+                                serde_json::from_str::<Params>(&t.params).ok()?,
+                            ))
+                        });
+                        let from_best = || {
+                            Some((
+                                format!("лучшего trial прогона {}", r.name),
+                                r.best.as_ref()?.get("params")?.as_object()?.clone(),
+                            ))
+                        };
+                        let Some((src, params)) = from_trial.or_else(from_best) else {
+                            return;
+                        };
                         this.form_from_run(this.sel_run, window, cx);
-                        this.custom = false; // продолжение study — снова подбор Optuna
-                        let name = this.runs[this.sel_run].name.clone();
-                        Self::set_input(&this.out_name, name, window, cx);
+                        this.custom = true;
+                        this.apply_params(&params, window, cx);
+                        this.params_note =
+                            Some(format!("Параметры {src}. Поменяйте нужное и запустите."));
+                        Self::set_input(&this.out_name, String::new(), window, cx);
                         this.tab = Tab::Launch;
                         cx.notify();
-                    },
-                )))
-            })
-            .when(known, |d| d.child(band_button("run-edit", Lucide::SlidersHorizontal, "Параметры в редактор", p.ink, p.bg).on_click(cx.listener(
-                move |this, _, window, cx| {
-                    // Выбранный trial, иначе лучший.
-                    let r = &this.runs[this.sel_run];
-                    let from_trial = this.sel_trial.as_ref().and_then(|n| {
-                        let t = r.trials.iter().find(|t| &t.number == n)?;
-                        Some((format!("trial {n} прогона {} (F1 {})", r.name, fmt(t.f1)), serde_json::from_str::<Params>(&t.params).ok()?))
-                    });
-                    let from_best = || Some((format!("лучшего trial прогона {}", r.name), r.best.as_ref()?.get("params")?.as_object()?.clone()));
-                    let Some((src, params)) = from_trial.or_else(from_best) else { return };
-                    this.form_from_run(this.sel_run, window, cx);
-                    this.custom = true;
-                    this.apply_params(&params, window, cx);
-                    this.params_note = Some(format!("Параметры {src}. Поменяйте нужное и запустите."));
-                    Self::set_input(&this.out_name, String::new(), window, cx);
-                    this.tab = Tab::Launch;
-                    cx.notify();
-                },
-            ))));
+                    })),
+                )
+            });
 
         let scoreline = card(p)
             .mx_6()
@@ -2726,18 +4031,34 @@ impl Studio {
         });
 
         // ---- кто и как запускал ----
-        let launches = r.studio.as_ref().and_then(|s| s["launches"].as_array().cloned()).unwrap_or_default();
+        let launches = r
+            .studio
+            .as_ref()
+            .and_then(|s| s["launches"].as_array().cloned())
+            .unwrap_or_default();
         let last = launches.last().cloned();
         let s = |v: &serde_json::Value| v.as_str().unwrap_or("?").to_string();
         let versions = get("versions");
         let env_line = [get("device").as_str().map(String::from)]
             .into_iter()
-            .chain(["python", "torch", "optuna"].map(|k| versions[k].as_str().map(|v| format!("{k} {v}"))))
+            .chain(
+                ["python", "torch", "optuna"]
+                    .map(|k| versions[k].as_str().map(|v| format!("{k} {v}"))),
+            )
             .flatten()
             .collect::<Vec<_>>()
             .join(" · ");
-        let data_dir = get("data_dir").as_str().map(String::from).or_else(|| last.as_ref().and_then(|l| Job::arg(&serde_json::from_value::<Vec<String>>(l["args"].clone()).ok()?, "--data-dir")));
-        let data_missing = data_dir.as_ref().is_some_and(|d| !self.root.join(d).exists());
+        let data_dir = get("data_dir").as_str().map(String::from).or_else(|| {
+            last.as_ref().and_then(|l| {
+                Job::arg(
+                    &serde_json::from_value::<Vec<String>>(l["args"].clone()).ok()?,
+                    "--data-dir",
+                )
+            })
+        });
+        let data_missing = data_dir
+            .as_ref()
+            .is_some_and(|d| !self.root.join(d).exists());
         let script = script_changed(&self.root, &r.path);
         let snap = r.path.join(SNAPSHOT);
         let provenance = v_flex()
@@ -2755,10 +4076,19 @@ impl Studio {
                     .child(small_caps("Кто и как запускал", p.muted))
                     .child(div().flex_1())
                     .when(last.is_some() && known, |d| {
-                        d.child(band_button("run-repeat", Lucide::Repeat, "Повторить точно", p.ink, p.bg).on_click(cx.listener(|this, _, _, cx| {
-                            this.repeat_run(this.sel_run, cx);
-                            cx.notify();
-                        })))
+                        d.child(
+                            band_button(
+                                "run-repeat",
+                                Lucide::Repeat,
+                                "Повторить точно",
+                                p.ink,
+                                p.bg,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.repeat_run(this.sel_run, cx);
+                                cx.notify();
+                            })),
+                        )
                     }),
             )
             .child(stat_line(
@@ -2769,43 +4099,96 @@ impl Studio {
                         s(&l["author"]),
                         s(&l["host"]),
                         s(&l["started"]),
-                        if launches.len() > 1 { format!(" · запусков {}", launches.len()) } else { String::new() }
+                        if launches.len() > 1 {
+                            format!(" · запусков {}", launches.len())
+                        } else {
+                            String::new()
+                        }
                     ),
                     None => "неизвестно — прогон запущен не из ML Studio".into(),
                 },
                 if last.is_some() { p.ink } else { p.muted },
                 p,
             ))
-            .child(stat_line("Окружение", if env_line.is_empty() { "—".into() } else { env_line }, p.ink, p))
-            .child(stat_line("Seed", get("seed").as_u64().map_or("—".into(), |v| v.to_string()), p.ink, p))
+            .child(stat_line(
+                "Окружение",
+                if env_line.is_empty() {
+                    "—".into()
+                } else {
+                    env_line
+                },
+                p.ink,
+                p,
+            ))
+            .child(stat_line(
+                "Seed",
+                get("seed").as_u64().map_or("—".into(), |v| v.to_string()),
+                p.ink,
+                p,
+            ))
             .child(stat_line(
                 "Данные",
-                data_dir.map_or("—".into(), |d| if data_missing { format!("{d} · нет на этом компьютере") } else { d }),
+                data_dir.map_or("—".into(), |d| {
+                    if data_missing {
+                        format!("{d} · нет на этом компьютере")
+                    } else {
+                        d
+                    }
+                }),
                 if data_missing { p.loss } else { p.ink },
                 p,
             ))
             .child(
                 h_flex()
                     .gap_3()
-                    .child(stat_line(
-                        "Скрипт",
-                        match script {
-                            Some(false) => "hpo_pointnet.py не менялся с первого запуска".into(),
-                            Some(true) => "hpo_pointnet.py изменён после запуска — повтор не будет точным".into(),
-                            None => "копии нет — прогон запущен не из ML Studio".into(),
-                        },
-                        match script {
-                            Some(false) => p.win,
-                            Some(true) => p.loss,
-                            None => p.muted,
-                        },
-                        p,
-                    ).flex_1().min_w_0())
-                    .when(script.is_some(), |d| d.child(icon_button("run-snap", Lucide::FileCode, "Открыть копию скрипта", p).on_click(move |_, _, _| open_path(&snap)))),
+                    .child(
+                        stat_line(
+                            "Скрипт",
+                            match script {
+                                Some(false) => {
+                                    "hpo_pointnet.py не менялся с первого запуска".into()
+                                }
+                                Some(true) => {
+                                    "hpo_pointnet.py изменён после запуска — повтор не будет точным"
+                                        .into()
+                                }
+                                None => "копии нет — прогон запущен не из ML Studio".into(),
+                            },
+                            match script {
+                                Some(false) => p.win,
+                                Some(true) => p.loss,
+                                None => p.muted,
+                            },
+                            p,
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    )
+                    .when(script.is_some(), |d| {
+                        d.child(
+                            icon_button("run-snap", Lucide::FileCode, "Открыть копию скрипта", p)
+                                .on_click(move |_, _, _| open_path(&snap)),
+                        )
+                    }),
             )
             .when_some(last.as_ref(), |d, l| {
-                let args = l["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-                d.child(div().pt_1().font_family(MONO).text_xs().text_color(p.muted).child(format!("$ {} {args}", s(&l["program"]))))
+                let args = l["args"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                d.child(
+                    div()
+                        .pt_1()
+                        .font_family(MONO)
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(format!("$ {} {args}", s(&l["program"]))),
+                )
             })
             .child(div().pt_2().child(Input::new(&self.note)));
 
@@ -2821,9 +4204,29 @@ impl Studio {
             .child(provenance)
             .children(self.render_influence(r, p))
             .child(self.render_scene_eval(self.sel_run, p, cx))
-            .when_some(self.delete_error.clone(), |d, e| d.child(div().px_6().py_2().border_b_1().border_color(p.rule).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.loss).child(e)))
+            .when_some(self.delete_error.clone(), |d, e| {
+                d.child(
+                    div()
+                        .px_6()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(p.rule)
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.loss)
+                        .child(e),
+                )
+            })
             .when(!params.is_null(), |d| {
-                d.child(div().px_6().pt_3().font_family(MONO).text_xs().text_color(p.muted).child(format!("params {params}")))
+                d.child(
+                    div()
+                        .px_6()
+                        .pt_3()
+                        .font_family(MONO)
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(format!("params {params}")),
+                )
             });
 
         if !self.trial_epochs.is_empty() {
@@ -2838,14 +4241,34 @@ impl Studio {
                     .bg(p.surface)
                     .border_1()
                     .border_color(p.rule)
-                    .child(chart_title(&format!("F1 по эпохам · trial {}", sel.clone().unwrap_or_default()), line, p))
-                    .child(f1_chart("trial-chart", self.trial_epochs.clone(), line, None, class_color(&target))),
+                    .child(chart_title(
+                        &format!("F1 по эпохам · trial {}", sel.clone().unwrap_or_default()),
+                        line,
+                        p,
+                    ))
+                    .child(f1_chart(
+                        "trial-chart",
+                        self.trial_epochs.clone(),
+                        line,
+                        None,
+                        class_color(&target),
+                    )),
             );
         }
 
         detail = detail
-            .child(div().px_6().pt_4().pb_2().child(display("Таблица trials", 22., p.ink)))
-            .child(trow(["#", "Trial", "F1", "Precision", "Recall", "Время", "Итог"].map(String::from), true, p));
+            .child(
+                div()
+                    .px_6()
+                    .pt_4()
+                    .pb_2()
+                    .child(display("Таблица trials", 22., p.ink)),
+            )
+            .child(trow(
+                ["#", "Trial", "F1", "Precision", "Recall", "Время", "Итог"].map(String::from),
+                true,
+                p,
+            ));
         let mut line_drawn = line.is_none();
         for (pos, tr) in trials.iter().enumerate() {
             if !line_drawn && tr.f1.is_some() && tr.f1 < line {
@@ -2868,7 +4291,8 @@ impl Studio {
                         fmt(tr.f1),
                         fmt(tr.precision),
                         fmt(tr.recall),
-                        tr.seconds.map_or("—".into(), |s| hms(Duration::from_secs_f64(s))),
+                        tr.seconds
+                            .map_or("—".into(), |s| hms(Duration::from_secs_f64(s))),
                         state.into(),
                     ],
                     false,
@@ -2877,15 +4301,24 @@ impl Studio {
                 .id(("trial", pos))
                 .cursor_pointer()
                 .hover(|s| s.bg(p.surface))
-                .when(sel.as_ref() == Some(&tr.number), |d| d.bg(p.surface).font_weight(FontWeight::SEMIBOLD))
+                .when(sel.as_ref() == Some(&tr.number), |d| {
+                    d.bg(p.surface).font_weight(FontWeight::SEMIBOLD)
+                })
                 .when(line.is_some() && tr.f1 >= line, |d| d.text_color(p.win))
                 .when(tr.state == "FAIL", |d| d.text_color(p.loss))
                 .when(tr.state == "PRUNED", |d| d.text_color(p.muted))
                 .child(duration_bar(tr.seconds.unwrap_or(0.), max_secs, p))
-                .when(!tr.error.is_empty() || !tr.params.is_empty(), |d| d.tooltip({
-                    let e: SharedString = if tr.error.is_empty() { format!("params {}", tr.params) } else { tr.error.clone() }.into();
-                    move |w, cx| Tooltip::new(e.clone()).build(w, cx)
-                }))
+                .when(!tr.error.is_empty() || !tr.params.is_empty(), |d| {
+                    d.tooltip({
+                        let e: SharedString = if tr.error.is_empty() {
+                            format!("params {}", tr.params)
+                        } else {
+                            tr.error.clone()
+                        }
+                        .into();
+                        move |w, cx| Tooltip::new(e.clone()).build(w, cx)
+                    })
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.sel_trial = Some(n.clone());
                     this.load_trial_epochs();
@@ -2893,7 +4326,11 @@ impl Studio {
                 })),
             );
         }
-        h_flex().size_full().child(list).child(detail.child(div().h(px(24.)))).into_any_element()
+        h_flex()
+            .size_full()
+            .child(list)
+            .child(detail.child(div().h(px(24.))))
+            .into_any_element()
     }
 
     // ---------- запуск ----------
@@ -2901,55 +4338,99 @@ impl Studio {
     fn render_launch(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
         let (program, args, title) = self.command(cx);
         let field = |label: &str, input: &Entity<InputState>| {
-            v_flex().gap_1().child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child(label.to_string())).child(Input::new(input))
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.muted)
+                        .child(label.to_string()),
+                )
+                .child(Input::new(input))
         };
         let run_all = self.run_all;
-        let section = |title: &str| div().pt_4().pb_1().border_b_1().border_color(p.rule).child(display(title, 20., p.ink));
+        let section = |title: &str| {
+            div()
+                .pt_4()
+                .pb_1()
+                .border_b_1()
+                .border_color(p.rule)
+                .child(display(title, 20., p.ink))
+        };
 
-        let targets = h_flex().gap_1().flex_wrap().children(TARGETS.iter().map(|&o| {
-            let selected = self.target == o;
-            h_flex()
-                .id(ElementId::Name(format!("tg-{o}").into()))
-                .gap_2()
-                .px_3()
-                .py_1p5()
-                .rounded_lg()
-                .cursor_pointer()
-                .border_1()
-                .border_color(if selected { class_color(o) } else { p.rule })
-                .bg(if selected { class_color(o) } else { p.surface })
-                .text_color(if selected { rgb(0xFFFFFF).into() } else { p.ink })
-                .child(div().size(px(10.)).rounded_full().bg(if selected { rgb(0xFFFFFF).into() } else { class_color(o) }))
-                .child(format!("{} · {o}", class_ru(o)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.target = o;
-                    cx.notify();
-                }))
-        }));
+        let targets = h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(TARGETS.iter().map(|&o| {
+                let selected = self.target == o;
+                h_flex()
+                    .id(ElementId::Name(format!("tg-{o}").into()))
+                    .gap_2()
+                    .px_3()
+                    .py_1p5()
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(if selected { class_color(o) } else { p.rule })
+                    .bg(if selected { class_color(o) } else { p.surface })
+                    .text_color(if selected {
+                        rgb(0xFFFFFF).into()
+                    } else {
+                        p.ink
+                    })
+                    .child(div().size(px(10.)).rounded_full().bg(if selected {
+                        rgb(0xFFFFFF).into()
+                    } else {
+                        class_color(o)
+                    }))
+                    .child(format!("{} · {o}", class_ru(o)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.target = o;
+                        cx.notify();
+                    }))
+            }));
         let features = h_flex().gap_1().children(FEATURES.iter().map(|&o| {
-            choice(ElementId::Name(format!("ft-{o}").into()), o, self.features == o).on_click(cx.listener(move |this, _, _, cx| {
+            choice(
+                ElementId::Name(format!("ft-{o}").into()),
+                o,
+                self.features == o,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
                 this.features = o;
                 cx.notify();
             }))
         }));
-        let tasks = h_flex().gap_1().flex_wrap().children(TASKS.iter().map(|&o| {
-            let label = match o {
-                "7" => "№7 отчёт".to_string(),
-                "final" => "final".to_string(),
-                n => format!("№{n} {}", class_ru(TARGETS[n.parse::<usize>().unwrap() - 2])),
-            };
-            choice(ElementId::Name(format!("tk-{o}").into()), label, self.tasks.contains(&o)).on_click(cx.listener(move |this, _, _, cx| {
-                match this.tasks.iter().position(|x| *x == o) {
-                    Some(i) if this.tasks.len() > 1 => _ = this.tasks.remove(i),
-                    Some(_) => {}
-                    None => {
-                        this.tasks.push(o);
-                        this.tasks.sort_by_key(|x| TASKS.iter().position(|y| y == x));
+        let tasks = h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(TASKS.iter().map(|&o| {
+                let label = match o {
+                    "7" => "№7 отчёт".to_string(),
+                    "final" => "final".to_string(),
+                    n => format!(
+                        "№{n} {}",
+                        class_ru(TARGETS[n.parse::<usize>().unwrap() - 2])
+                    ),
+                };
+                choice(
+                    ElementId::Name(format!("tk-{o}").into()),
+                    label,
+                    self.tasks.contains(&o),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    match this.tasks.iter().position(|x| *x == o) {
+                        Some(i) if this.tasks.len() > 1 => _ = this.tasks.remove(i),
+                        Some(_) => {}
+                        None => {
+                            this.tasks.push(o);
+                            this.tasks
+                                .sort_by_key(|x| TASKS.iter().position(|y| y == x));
+                        }
                     }
-                }
-                cx.notify();
-            }))
-        }));
+                    cx.notify();
+                }))
+            }));
 
         // ---- гиперпараметры: Optuna или своя конфигурация ----
         let custom = self.custom && !run_all;
@@ -2957,14 +4438,35 @@ impl Studio {
         let out_dir = Job::arg(&args, "--output-dir").unwrap_or_default();
         let params_file = Job::arg(&args, "--fixed-params").map(|p| self.root.join(p));
         // --fixed-params ставится первым trial только в пустой study (hpo_pointnet.py).
-        let blocked: Option<String> = if let Some(c) = self.conflict((!run_all).then_some(out_dir.as_str())) {
+        let final_data = self.final_data_dir.read(cx).value().trim().to_string();
+        let patch_valid = [&self.patch_points, &self.patches_per_scene]
+            .iter()
+            .all(|i| {
+                i.read(cx)
+                    .value()
+                    .trim()
+                    .parse::<usize>()
+                    .is_ok_and(|n| n > 0)
+            });
+        let blocked: Option<String> = if run_all
+            && self.tasks.contains(&"final")
+            && (final_data.is_empty() || !self.root.join(&final_data).is_dir())
+        {
+            Some("Выберите существующий каталог данных для финального прогона.".into())
+        } else if self.runs_dir.read(cx).value().trim().is_empty() {
+            Some("Укажите каталог результатов.".into())
+        } else if !patch_valid {
+            Some("Число точек в патче и патчей на сцену должно быть положительным.".into())
+        } else if let Some(c) = self.conflict((!run_all).then_some(out_dir.as_str())) {
             Some(c)
         } else if custom && self.space_error.is_some() {
             self.space_error.clone()
         } else if custom && !errs.is_empty() {
             Some("Исправьте гиперпараметры, отмеченные красным.".into())
         } else if custom && self.root.join(&out_dir).join("study.db").exists() {
-            Some(format!("В {out_dir} уже есть study.db — своя конфигурация применяется только к новому study. Задайте другое имя прогона."))
+            Some(format!(
+                "В {out_dir} уже есть study.db — своя конфигурация применяется только к новому study. Задайте другое имя прогона."
+            ))
         } else {
             None
         };
@@ -2974,7 +4476,11 @@ impl Studio {
             .filter(|r| r.target().as_deref() == Some(self.target))
             .filter_map(|r| {
                 let b = r.best.as_ref()?;
-                Some((r.name.clone(), b.get("f1")?.as_f64()?, b.get("params")?.as_object()?.clone()))
+                Some((
+                    r.name.clone(),
+                    b.get("f1")?.as_f64()?,
+                    b.get("params")?.as_object()?.clone(),
+                ))
             })
             .collect();
         best_runs.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -2994,7 +4500,12 @@ impl Studio {
                             "false" => "нет",
                             o => o,
                         };
-                        choice(ElementId::Name(format!("hp-{}-{o}", spec.key).into()), label, self.param_choice[i] == v).on_click(cx.listener(move |this, _, _, cx| {
+                        choice(
+                            ElementId::Name(format!("hp-{}-{o}", spec.key).into()),
+                            label,
+                            self.param_choice[i] == v,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             this.param_choice[i] = v.clone();
                             cx.notify();
                         }))
@@ -3006,11 +4517,36 @@ impl Studio {
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(h_flex().gap_2().child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child(spec.label)).child(div().text_xs().font_family(MONO).text_color(p.muted).opacity(0.7).child(spec.key)))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(p.muted)
+                                .child(spec.label),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family(MONO)
+                                .text_color(p.muted)
+                                .opacity(0.7)
+                                .child(spec.key),
+                        ),
+                )
                 .child(control)
                 .child(match err {
                     Some(e) => div().text_xs().text_color(p.loss).child(e),
-                    None => div().text_xs().text_color(p.muted).child(if spec.hint.is_empty() { spec.range() } else { format!("{} · {}", spec.range(), spec.hint) }),
+                    None => div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(if spec.hint.is_empty() {
+                            spec.range()
+                        } else {
+                            format!("{} · {}", spec.range(), spec.hint)
+                        }),
                 })
         };
         let custom_only = self.custom_only;
@@ -3111,6 +4647,7 @@ impl Studio {
                             .child(div().text_sm().text_color(p.muted).child("№2–6 — подбор по классам, №7 — сводный отчёт, final — финальные прогоны с лучшими параметрами."))
                             .child(tasks)
                             .child(field("Эпох в финальном прогоне", &self.final_epochs))
+                            .child(field("Данные для финала", &self.final_data_dir))
                     })
                     .child(section("Обучение"))
                     .child(
@@ -3144,8 +4681,10 @@ impl Studio {
                         Self::set_input(&this.epochs, "1".into(), window, cx);
                         cx.notify();
                     }))))
+                    .child(h_flex().gap_3().child(field("Точек в патче", &self.patch_points).flex_1()).child(field("Патчей на сцену", &self.patches_per_scene).flex_1()))
                     .child(section("Окружение"))
-                    .child(h_flex().gap_3().child(field("Данные", &self.data_dir).flex_1()).child(field("Python", &self.python).flex_1()))
+                    .child(h_flex().gap_3().child(field("Данные для подбора", &self.data_dir).flex_1()).child(field("Python", &self.python).flex_1()))
+                    .child(field("Каталог результатов", &self.runs_dir))
                     .child(field("Дополнительные аргументы", &self.extra))
                     .child(div().h(px(24.))),
             );
@@ -3164,11 +4703,31 @@ impl Studio {
                     .min_w_0()
                     .gap_1()
                     .child(small_caps("Команда", p.muted))
-                    .child(div().font_family(MONO).text_xs().text_color(p.ink).child(format!("{program} {}", args.join(" "))))
-                    .when_some(blocked.clone(), |d, b| d.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.loss).child(b))),
+                    .child(
+                        div()
+                            .font_family(MONO)
+                            .text_xs()
+                            .text_color(p.ink)
+                            .child(format!("{program} {}", args.join(" "))),
+                    )
+                    .when_some(blocked.clone(), |d, b| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(p.loss)
+                                .child(b),
+                        )
+                    }),
             )
             .child({
-                let step = scenario::Step { title: title.clone(), args: args.clone(), fixed_params: params_file.as_ref().map_or(serde_json::Value::Null, |_| serde_json::Value::Object(params.clone())) };
+                let step = scenario::Step {
+                    title: title.clone(),
+                    args: args.clone(),
+                    fixed_params: params_file.as_ref().map_or(serde_json::Value::Null, |_| {
+                        serde_json::Value::Object(params.clone())
+                    }),
+                };
                 // Занятый каталог и study.db проверяются при запуске шага; здесь — только ошибки в самой конфигурации.
                 let bad = custom && (self.space_error.is_some() || !errs.is_empty());
                 Button::new("to-scenario")
@@ -3196,8 +4755,13 @@ impl Studio {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(path) = &params_file {
                             let json = serde_json::to_string_pretty(&params).unwrap();
-                            if let Err(e) = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(path, json)) {
-                                this.params_note = Some(format!("Не удалось записать {}: {e}", show_path(path)));
+                            if let Err(e) = path
+                                .parent()
+                                .map_or(Ok(()), std::fs::create_dir_all)
+                                .and_then(|_| std::fs::write(path, json))
+                            {
+                                this.params_note =
+                                    Some(format!("Не удалось записать {}: {e}", show_path(path)));
                                 cx.notify();
                                 return;
                             }
@@ -3206,7 +4770,11 @@ impl Studio {
                         cx.notify();
                     })),
             );
-        v_flex().size_full().child(div().flex_1().min_h_0().overflow_hidden().child(form)).child(footer).into_any_element()
+        v_flex()
+            .size_full()
+            .child(div().flex_1().min_h_0().overflow_hidden().child(form))
+            .child(footer)
+            .into_any_element()
     }
 
     // ---------- датасеты ----------
@@ -3220,7 +4788,13 @@ impl Studio {
             .border_r_1()
             .border_color(p.rule)
             .overflow_y_scrollbar()
-            .child(div().px_4().pt_4().pb_2().child(display("Датасеты", 22., p.ink)))
+            .child(
+                div()
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
+                    .child(display("Датасеты", 22., p.ink)),
+            )
             .children(self.datasets.iter().enumerate().map(|(i, d)| {
                 v_flex()
                     .id(("ds", i))
@@ -3231,30 +4805,76 @@ impl Studio {
                     .cursor_pointer()
                     .hover(|s| s.bg(p.raised))
                     .when(i == self.sel_dataset, |d| d.bg(p.raised))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(d.name.clone()))
-                    .child(div().text_xs().font_features(tnum()).text_color(p.muted).child(format!(
-                        "{} сцен · {} · {:.1} млн точек",
-                        d.scenes.len(),
-                        human_bytes(d.bytes()),
-                        d.points() as f64 / 1e6
-                    )))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(p.ink)
+                            .child(d.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_features(tnum())
+                            .text_color(p.muted)
+                            .child(format!(
+                                "{} сцен · {} · {:.1} млн точек",
+                                d.scenes.len(),
+                                human_bytes(d.bytes()),
+                                d.points() as f64 / 1e6
+                            )),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.sel_dataset = i;
                         cx.notify();
                     }))
             }))
-            .when(self.datasets.is_empty(), |d| d.child(div().px_4().text_color(p.muted).child("В корне проекта нет каталогов с .npy.")));
+            .when(self.datasets.is_empty(), |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .text_color(p.muted)
+                        .child("В корне проекта нет каталогов с .npy."),
+                )
+            });
 
         let Some(d) = self.datasets.get(self.sel_dataset) else {
             return h_flex().size_full().child(list).into_any_element();
         };
         let name = d.name.clone();
         let path = d.path.clone();
-        let max = d.scenes.iter().filter_map(|s| s.shape.first()).max().copied().unwrap_or(1).max(1);
-        let min = d.scenes.iter().filter_map(|s| s.shape.first()).min().copied().unwrap_or(0);
-        let cols = d.scenes.first().and_then(|s| s.shape.get(1)).copied().unwrap_or(0);
+        let max = d
+            .scenes
+            .iter()
+            .filter_map(|s| s.shape.first())
+            .max()
+            .copied()
+            .unwrap_or(1)
+            .max(1);
+        let min = d
+            .scenes
+            .iter()
+            .filter_map(|s| s.shape.first())
+            .min()
+            .copied()
+            .unwrap_or(0);
+        let cols = d
+            .scenes
+            .first()
+            .and_then(|s| s.shape.get(1))
+            .copied()
+            .unwrap_or(0);
         let dark = self.dark;
-        let scenes: Vec<(String, u64, u64)> = d.scenes.iter().map(|s| (s.name.clone(), s.shape.first().copied().unwrap_or(0), s.bytes)).collect();
+        let scenes: Vec<(String, u64, u64)> = d
+            .scenes
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.shape.first().copied().unwrap_or(0),
+                    s.bytes,
+                )
+            })
+            .collect();
         let n = scenes.len();
         let dir = d.path.clone();
 
@@ -3271,19 +4891,56 @@ impl Studio {
                     .border_b_1()
                     .border_color(p.rule)
                     // Имя не переносится по буквам: в узком окне кнопки уходят на следующую строку.
-                    .child(v_flex().flex_1().min_w(px(220.)).overflow_hidden().whitespace_nowrap().text_ellipsis().child(display(&d.name, 34., p.ink)).child(div().text_xs().text_color(p.muted).overflow_hidden().text_ellipsis().child(show_path(&d.path))))
-                    .child(band_button("ds-open", Lucide::FolderOpen, "Папка", p.raised, p.ink).on_click(move |_, _, _| open_path(&path)))
-                    .when(!d.name.ends_with("_mini") && d.scenes.len() > MINI_SCENES, |h| {
-                        h.child(band_button("ds-mini", Lucide::Zap, "Мини-копия", p.raised, p.ink).on_click(cx.listener(|this, _, _, cx| this.make_mini(cx))))
-                    })
-                    .child(band_button("ds-use", Lucide::Play, "Обучать на нём", p.ink, p.bg).on_click(cx.listener(move |this, _, window, cx| {
-                        Self::set_input(&this.data_dir, name.clone(), window, cx);
-                        this.tab = Tab::Launch;
-                        cx.notify();
-                    }))),
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(220.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(display(&d.name, 34., p.ink))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(p.muted)
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(show_path(&d.path)),
+                            ),
+                    )
+                    .child(
+                        band_button("ds-open", Lucide::FolderOpen, "Папка", p.raised, p.ink)
+                            .on_click(move |_, _, _| open_path(&path)),
+                    )
+                    .when(
+                        !d.name.ends_with("_mini") && d.scenes.len() > MINI_SCENES,
+                        |h| {
+                            h.child(
+                                band_button("ds-mini", Lucide::Zap, "Мини-копия", p.raised, p.ink)
+                                    .on_click(cx.listener(|this, _, _, cx| this.make_mini(cx))),
+                            )
+                        },
+                    )
+                    .child(
+                        band_button("ds-use", Lucide::Play, "Обучать на нём", p.ink, p.bg)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                Self::set_input(&this.data_dir, name.clone(), window, cx);
+                                this.tab = Tab::Launch;
+                                cx.notify();
+                            })),
+                    ),
             )
             .when_some(self.ds_note.clone(), |d, (ok, note)| {
-                d.child(div().px_6().py_2().border_b_1().border_color(p.rule).text_sm().text_color(if ok { p.win } else { p.loss }).child(note))
+                d.child(
+                    div()
+                        .px_6()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(p.rule)
+                        .text_sm()
+                        .text_color(if ok { p.win } else { p.loss })
+                        .child(note),
+                )
             })
             .child(
                 h_flex()
@@ -3295,9 +4952,17 @@ impl Studio {
                     .border_b_1()
                     .border_color(p.rule)
                     .child(stat_big("Сцен", d.scenes.len().to_string(), p))
-                    .child(stat_big("Точек", format!("{:.1} млн", d.points() as f64 / 1e6), p))
+                    .child(stat_big(
+                        "Точек",
+                        format!("{:.1} млн", d.points() as f64 / 1e6),
+                        p,
+                    ))
                     .child(stat_big("На диске", human_bytes(d.bytes()), p))
-                    .child(stat_big("На сцену", format!("{}–{} тыс.", min / 1000, max / 1000), p))
+                    .child(stat_big(
+                        "На сцену",
+                        format!("{}–{} тыс.", min / 1000, max / 1000),
+                        p,
+                    ))
                     .child(stat_big("Колонок", cols.to_string(), p)),
             )
             .child(
@@ -3311,34 +4976,58 @@ impl Studio {
                             .min_w(px(320.))
                             .max_w(px(480.))
                             .h_full()
-                            .child(trow(["Сцена", "Точек", "Размер"].map(String::from), true, p))
+                            .child(trow(
+                                ["Сцена", "Точек", "Размер"].map(String::from),
+                                true,
+                                p,
+                            ))
                             .child(
                                 uniform_list(
                                     "scenes",
                                     n,
-                                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                                        let p = pal(dark);
-                                        let open = this.preview.as_ref().map(|pv| pv.scene.clone());
-                                        range
-                                            .map(|i| {
-                                                let (name, pts, bytes) = &scenes[i];
-                                                let scene = dir.join(name);
-                                                trow([name.clone(), thousands(*pts), human_bytes(*bytes)], false, p)
+                                    cx.processor(
+                                        move |this, range: std::ops::Range<usize>, _, cx| {
+                                            let p = pal(dark);
+                                            let open =
+                                                this.preview.as_ref().map(|pv| pv.scene.clone());
+                                            range
+                                                .map(|i| {
+                                                    let (name, pts, bytes) = &scenes[i];
+                                                    let scene = dir.join(name);
+                                                    trow(
+                                                        [
+                                                            name.clone(),
+                                                            thousands(*pts),
+                                                            human_bytes(*bytes),
+                                                        ],
+                                                        false,
+                                                        p,
+                                                    )
                                                     .cursor_pointer()
                                                     .hover(|s| s.bg(p.surface))
-                                                    .when(open.as_ref() == Some(&scene), |d| d.bg(p.surface).font_weight(FontWeight::SEMIBOLD))
+                                                    .when(open.as_ref() == Some(&scene), |d| {
+                                                        d.bg(p.surface)
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                    })
                                                     .child(duration_bar(*pts as f64, max as f64, p))
-                                                    .on_click(cx.listener(move |this, _, _, cx| this.open_preview(scene.clone(), cx)))
-                                            })
-                                            .collect()
-                                    }),
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.open_preview(scene.clone(), cx)
+                                                    }))
+                                                })
+                                                .collect()
+                                        },
+                                    ),
                                 )
                                 .flex_1(),
                             ),
                     )
                     .child(self.render_preview(p, cx)),
             );
-        h_flex().size_full().child(list).child(detail).into_any_element()
+        h_flex()
+            .size_full()
+            .child(list)
+            .child(detail)
+            .into_any_element()
     }
 
     fn render_testing(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
@@ -3393,41 +5082,74 @@ impl Studio {
         };
         let run = m.run.and_then(|i| self.runs.get(i));
         let eval = self.test_eval.clone();
-        let info = |k: &str| eval.as_ref().and_then(|e| e["model"][k].as_str().map(String::from));
+        let info = |k: &str| {
+            eval.as_ref()
+                .and_then(|e| e["model"][k].as_str().map(String::from))
+        };
         let target = run.and_then(|r| r.target()).or_else(|| info("target"));
         let features = run.and_then(|r| r.features()).or_else(|| info("features"));
         let folder = m.file.parent().map(Path::to_path_buf).unwrap_or_default();
 
         let sel_ds = dataset.map(|d| d.name.clone());
-        let datasets = h_flex().gap_1().flex_wrap().children(self.datasets.iter().map(|d| {
-            let name = d.name.clone();
-            choice(SharedString::from(format!("td-{}", d.name)), format!("{} · {} сцен", d.name, d.scenes.len()), Some(&d.name) == sel_ds.as_ref()).on_click(cx.listener(move |this, _, _, cx| {
-                this.test_dataset = Some(name.clone());
-                this.refresh_tests();
-                cx.notify();
-            }))
-        }));
+        let datasets = h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(self.datasets.iter().map(|d| {
+                let name = d.name.clone();
+                choice(
+                    SharedString::from(format!("td-{}", d.name)),
+                    format!("{} · {} сцен", d.name, d.scenes.len()),
+                    Some(&d.name) == sel_ds.as_ref(),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.test_dataset = Some(name.clone());
+                    this.refresh_tests();
+                    cx.notify();
+                }))
+            }));
         let running = dataset.is_some_and(|d| {
             let t = Self::test_title(m, d);
             self.jobs.iter().any(|j| j.running() && j.title == t)
         });
-        let (done, total) = eval.as_ref().map_or((0, 0), |e| (e["done"].as_u64().unwrap_or(0), e["total"].as_u64().unwrap_or(0)));
+        let (done, total) = eval.as_ref().map_or((0, 0), |e| {
+            (
+                e["done"].as_u64().unwrap_or(0),
+                e["total"].as_u64().unwrap_or(0),
+            )
+        });
         let note = if dataset.is_none() {
             "Нет датасетов: положите каталог со scene_*.npy в корень проекта.".to_string()
         } else if running {
-            format!("Идёт тест: {done} из {} сцен, лог — в «Трансляции». Таблица пополняется по ходу.", total.max(done))
+            format!(
+                "Идёт тест: {done} из {} сцен, лог — в «Трансляции». Таблица пополняется по ходу.",
+                total.max(done)
+            )
         } else if eval.is_none() {
             "Модель предсказывает каждую выбранную сцену целиком (GPU, минуты на сцену). Сцены берутся равномерно по датасету.".to_string()
         } else if done < total {
-            format!("Посчитано {done} из {total} сцен — тест прервали; «Досчитать» продолжит с места остановки.")
+            format!(
+                "Посчитано {done} из {total} сцен — тест прервали; «Досчитать» продолжит с места остановки."
+            )
         } else {
-            format!("{total} сцен, худшие сверху. Клик — сцена в 3D с ошибками модели. Другое число сцен — «Тестировать» заново.")
+            format!(
+                "{total} сцен, худшие сверху. Клик — сцена в 3D с ошибками модели. Другое число сцен — «Тестировать» заново."
+            )
         };
 
-        let dir = dataset.map(|d| test_dir(&self.root, &m.tag, &d.name)).unwrap_or_default();
-        let (t, label) = (target.clone().unwrap_or_default(), format!("{} · тест", m.label));
+        let dir = dataset
+            .map(|d| test_dir(&self.root, &m.tag, &d.name))
+            .unwrap_or_default();
+        let (t, label) = (
+            target.clone().unwrap_or_default(),
+            format!("{} · тест", m.label),
+        );
         let open: OpenScene = Rc::new(move |this, path, cx| {
-            let pred = dir.join(format!("{}__test.npy", path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()));
+            let pred = dir.join(format!(
+                "{}__test.npy",
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ));
             this.open_test_scene(path, pred, t.clone(), label.clone(), cx)
         });
         let table = self.scene_table(eval.as_ref(), run, p, cx, open);
@@ -3500,21 +5222,38 @@ impl Studio {
                     })
                     .children(table),
             );
-        h_flex().size_full().child(list).child(detail).into_any_element()
+        h_flex()
+            .size_full()
+            .child(list)
+            .child(detail)
+            .into_any_element()
     }
 
     fn render_preview(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
-        let panel = v_flex().flex_1().min_w_0().h_full().border_l_1().border_color(p.rule);
+        let panel = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .border_l_1()
+            .border_color(p.rule);
         let Some(pv) = &self.preview else {
             return panel
                 .justify_center()
                 .items_center()
                 .gap_2()
                 .child(display("3D-превью", 28., p.ink))
-                .child(div().text_color(p.muted).child("Выберите сцену в таблице — покажу облако точек."))
+                .child(
+                    div()
+                        .text_color(p.muted)
+                        .child("Выберите сцену в таблице — покажу облако точек."),
+                )
                 .into_any_element();
         };
-        let scene = pv.scene.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let scene = pv
+            .scene
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let by = pv.by;
         let toolbar = h_flex()
             .px_4()
@@ -3523,38 +5262,75 @@ impl Studio {
             .gap_2()
             .border_b_1()
             .border_color(p.rule)
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::SEMIBOLD).child(scene))
-            .child(choice("pv-class", "Классы", by == cloud::ColorBy::Class).on_click(cx.listener(|this, _, window, cx| {
-                if let Some(p) = this.preview.as_mut() {
-                    p.by = cloud::ColorBy::Class;
-                }
-                this.redraw_preview(Some(window), cx);
-            })))
-            .child(choice("pv-height", "Высота", by == cloud::ColorBy::Height).on_click(cx.listener(|this, _, window, cx| {
-                if let Some(p) = this.preview.as_mut() {
-                    p.by = cloud::ColorBy::Height;
-                }
-                this.redraw_preview(Some(window), cx);
-            })))
-            .when(matches!(pv.pred.as_ref().and_then(|x| x.result.as_ref()), Some(Ok(_))), |d| {
-                d.child(choice("pv-errors", "Ошибки", by == cloud::ColorBy::Errors).on_click(cx.listener(|this, _, window, cx| {
-                    if let Some(p) = this.preview.as_mut() {
-                        p.by = cloud::ColorBy::Errors;
-                    }
-                    this.redraw_preview(Some(window), cx);
-                })))
-            })
-            .child(Button::new("pv-reset").icon(Icon::new(Lucide::RotateCcw)).ghost().small().tooltip("Исходный вид").on_click(cx.listener(|this, _, window, cx| {
-                if let Some(p) = this.preview.as_mut() {
-                    p.view = cloud::View::default();
-                }
-                this.redraw_preview(Some(window), cx);
-            })));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(scene),
+            )
+            .child(
+                choice("pv-class", "Классы", by == cloud::ColorBy::Class).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        if let Some(p) = this.preview.as_mut() {
+                            p.by = cloud::ColorBy::Class;
+                        }
+                        this.redraw_preview(Some(window), cx);
+                    },
+                )),
+            )
+            .child(
+                choice("pv-height", "Высота", by == cloud::ColorBy::Height).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        if let Some(p) = this.preview.as_mut() {
+                            p.by = cloud::ColorBy::Height;
+                        }
+                        this.redraw_preview(Some(window), cx);
+                    },
+                )),
+            )
+            .when(
+                matches!(
+                    pv.pred.as_ref().and_then(|x| x.result.as_ref()),
+                    Some(Ok(_))
+                ),
+                |d| {
+                    d.child(
+                        choice("pv-errors", "Ошибки", by == cloud::ColorBy::Errors).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                if let Some(p) = this.preview.as_mut() {
+                                    p.by = cloud::ColorBy::Errors;
+                                }
+                                this.redraw_preview(Some(window), cx);
+                            }),
+                        ),
+                    )
+                },
+            )
+            .child(
+                Button::new("pv-reset")
+                    .icon(Icon::new(Lucide::RotateCcw))
+                    .ghost()
+                    .small()
+                    .tooltip("Исходный вид")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(p) = this.preview.as_mut() {
+                            p.view = cloud::View::default();
+                        }
+                        this.redraw_preview(Some(window), cx);
+                    })),
+            );
 
         // Строка моделей: лучший trial каждого прогона с best.pt.
         let models = self.models(&pv.scene);
         let current = pv.pred.as_ref().map(|x| x.label.clone());
-        let running = self.jobs.iter().any(|j| j.running() && j.predict.as_ref().is_some_and(|pj| pj.scene == pv.scene));
+        let running = self
+            .jobs
+            .iter()
+            .any(|j| j.running() && j.predict.as_ref().is_some_and(|pj| pj.scene == pv.scene));
         let models_row = h_flex()
             .px_4()
             .py_2()
@@ -3564,29 +5340,70 @@ impl Studio {
             .border_color(p.rule)
             .text_xs()
             .child(div().text_color(p.muted).child("Проверить моделью:"))
-            .when(models.is_empty(), |d| d.child(div().text_color(p.muted).child("нет прогонов с сохранённым best.pt")))
+            .when(models.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_color(p.muted)
+                        .child("нет прогонов с сохранённым best.pt"),
+                )
+            })
             .children(models.into_iter().take(6).enumerate().map(|(k, m)| {
                 let label = format!("{} · trial {}", m.run, m.trial);
-                let text = format!("{label} · F1 {}", m.f1.map_or("—".into(), |f| format!("{f:.3}")));
-                choice(("pv-model", k), text, current.as_deref() == Some(label.as_str())).disabled(running).on_click(cx.listener(move |this, _, _, cx| {
-                    this.predict(Model { run: m.run.clone(), checkpoint: m.checkpoint.clone(), target: m.target.clone(), ..m }, cx);
+                let text = format!(
+                    "{label} · F1 {}",
+                    m.f1.map_or("—".into(), |f| format!("{f:.3}"))
+                );
+                choice(
+                    ("pv-model", k),
+                    text,
+                    current.as_deref() == Some(label.as_str()),
+                )
+                .disabled(running)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.predict(
+                        Model {
+                            run: m.run.clone(),
+                            checkpoint: m.checkpoint.clone(),
+                            target: m.target.clone(),
+                            ..m
+                        },
+                        cx,
+                    );
                 }))
             }));
 
         let body = match (&pv.cloud, &pv.image) {
-            (None, _) => div().flex_1().flex().items_center().justify_center().text_color(p.muted).child("Читаю сцену…").into_any_element(),
-            (Some(Err(e)), _) => div().flex_1().p_4().text_color(p.loss).child(format!("Не удалось прочитать: {e}")).into_any_element(),
+            (None, _) => div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(p.muted)
+                .child("Читаю сцену…")
+                .into_any_element(),
+            (Some(Err(e)), _) => div()
+                .flex_1()
+                .p_4()
+                .text_color(p.loss)
+                .child(format!("Не удалось прочитать: {e}"))
+                .into_any_element(),
             (Some(Ok(_)), None) => div().flex_1().into_any_element(),
             (Some(Ok(_)), Some(image)) => div()
                 .id("pv-canvas")
                 .flex_1()
                 .min_h_0()
                 .cursor_grab()
-                .child(img(image.clone()).size_full().object_fit(ObjectFit::Contain))
+                .child(
+                    img(image.clone())
+                        .size_full()
+                        .object_fit(ObjectFit::Contain),
+                )
                 // Перетаскивание — вращение, колесо — масштаб.
                 // Обработчики только меняют вид; картинка пересчитывается раз за кадр в render().
                 .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                    let Some(p) = this.preview.as_mut() else { return };
+                    let Some(p) = this.preview.as_mut() else {
+                        return;
+                    };
                     if e.pressed_button != Some(MouseButton::Left) {
                         if p.last.take().is_some() {
                             p.dirty = true; // конец перетаскивания — полное качество
@@ -3603,15 +5420,20 @@ impl Studio {
                     p.dirty = true;
                     cx.notify();
                 }))
-                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    if let Some(p) = this.preview.as_mut().filter(|p| p.last.is_some()) {
-                        p.last = None;
-                        p.dirty = true;
-                        cx.notify();
-                    }
-                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(p) = this.preview.as_mut().filter(|p| p.last.is_some()) {
+                            p.last = None;
+                            p.dirty = true;
+                            cx.notify();
+                        }
+                    }),
+                )
                 .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
-                    let Some(p) = this.preview.as_mut() else { return };
+                    let Some(p) = this.preview.as_mut() else {
+                        return;
+                    };
                     let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
                     p.view.zoom = (p.view.zoom * (dy * 0.002).exp()).clamp(0.3, 20.);
                     p.dirty = true;
@@ -3627,7 +5449,10 @@ impl Studio {
                 _ => "сцена не из датасета этого прогона",
             };
             match &x.result {
-                None => div().text_color(p.muted).child(format!("{}: считаю предсказание… (лог — в «Трансляции»)", x.label)),
+                None => div().text_color(p.muted).child(format!(
+                    "{}: считаю предсказание… (лог — в «Трансляции»)",
+                    x.label
+                )),
                 Some(Err(e)) => div().text_color(p.loss).child(format!("{}: {e}", x.label)),
                 Some(Ok(o)) => {
                     let [tn, tp, fp, fn_] = o.counts;
@@ -3636,12 +5461,33 @@ impl Studio {
                     h_flex()
                         .gap_4()
                         .flex_wrap()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).font_features(tnum()).child(format!("{} · F1 на сцене {:.4}", x.label, o.f1())))
-                        .children([("верно найдено", 0x2EAD5B, tp), ("ложная тревога", 0xE8452C, fp), ("пропуск", 0xF2C200, fn_), ("верно отброшено", 0x5B6068, tn)].map(|(name, hex, n)| {
-                            h_flex().gap_1().child(div().size(px(10.)).rounded_full().bg(rgb(hex))).child(format!("{name} {:.1}%", pct(n)))
-                        }))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .font_features(tnum())
+                                .child(format!("{} · F1 на сцене {:.4}", x.label, o.f1())),
+                        )
+                        .children(
+                            [
+                                ("верно найдено", 0x2EAD5B, tp),
+                                ("ложная тревога", 0xE8452C, fp),
+                                ("пропуск", 0xF2C200, fn_),
+                                ("верно отброшено", 0x5B6068, tn),
+                            ]
+                            .map(|(name, hex, n)| {
+                                h_flex()
+                                    .gap_1()
+                                    .child(div().size(px(10.)).rounded_full().bg(rgb(hex)))
+                                    .child(format!("{name} {:.1}%", pct(n)))
+                            }),
+                        )
                         .child(div().text_color(p.muted).child(split))
-                        .when(o.uncovered > 0, |d| d.child(div().text_color(p.loss).child(format!("не покрыто {} точек", thousands(o.uncovered as u64)))))
+                        .when(o.uncovered > 0, |d| {
+                            d.child(div().text_color(p.loss).child(format!(
+                                "не покрыто {} точек",
+                                thousands(o.uncovered as u64)
+                            )))
+                        })
                 }
             }
         });
@@ -3688,19 +5534,33 @@ impl Studio {
 impl Studio {
     /// Окружение готово к обучению (пока проверка не прошла — не тревожим).
     fn env_ready(&self) -> bool {
-        self.env.as_ref().is_none_or(|e| e.packages.as_ref().is_some_and(|p| p.as_ref().is_ok_and(|p| p.missing().is_empty())))
+        self.env.as_ref().is_none_or(|e| {
+            e.packages
+                .as_ref()
+                .is_some_and(|p| p.as_ref().is_ok_and(|p| p.missing().is_empty()))
+        })
     }
 
     // ---------- сценарии ----------
 
     fn reload_scenarios(&mut self) {
-        let cur = self.scenarios.get(self.sel_scenario).map(|s| s.name.clone());
+        let cur = self
+            .scenarios
+            .get(self.sel_scenario)
+            .map(|s| s.name.clone());
         self.scenarios = scenario::scan(&self.root);
-        self.sel_scenario = self.scenarios.iter().position(|s| Some(&s.name) == cur.as_ref()).unwrap_or(0);
+        self.sel_scenario = self
+            .scenarios
+            .iter()
+            .position(|s| Some(&s.name) == cur.as_ref())
+            .unwrap_or(0);
     }
 
     fn new_scenario(&mut self) -> Option<usize> {
-        let s = scenario::Scenario { name: scenario::new_name(&self.root), steps: vec![] };
+        let s = scenario::Scenario {
+            name: scenario::new_name(&self.root),
+            steps: vec![],
+        };
         if let Err(e) = s.save(&self.root) {
             self.scenario_note = Some((false, format!("Не удалось создать сценарий: {e}")));
             return None;
@@ -3729,7 +5589,9 @@ impl Studio {
 
     /// Изменить шаги выбранного сценария и сохранить файл.
     fn edit_steps(&mut self, f: impl FnOnce(&mut Vec<scenario::Step>)) {
-        let Some(s) = self.scenarios.get_mut(self.sel_scenario) else { return };
+        let Some(s) = self.scenarios.get_mut(self.sel_scenario) else {
+            return;
+        };
         f(&mut s.steps);
         if let Err(e) = s.save(&self.root) {
             self.scenario_note = Some((false, format!("Не удалось сохранить «{}»: {e}", s.name)));
@@ -3737,7 +5599,13 @@ impl Studio {
     }
 
     fn rename_scenario(&mut self, to: String) {
-        let Some(s) = self.scenarios.iter_mut().find(|s| Some(&s.name) == self.scenario_name_for.as_ref()) else { return };
+        let Some(s) = self
+            .scenarios
+            .iter_mut()
+            .find(|s| Some(&s.name) == self.scenario_name_for.as_ref())
+        else {
+            return;
+        };
         let old = s.name.clone();
         match s.rename(&self.root, &to) {
             Ok(()) => {
@@ -3752,18 +5620,28 @@ impl Studio {
     }
 
     fn start_scenario(&mut self, from: usize, cx: &mut Context<Self>) {
-        let Some(s) = self.scenarios.get(self.sel_scenario) else { return };
+        let Some(s) = self.scenarios.get(self.sel_scenario) else {
+            return;
+        };
         if self.active.is_some() || from >= s.steps.len() {
             return;
         }
-        self.active = Some(Active { name: s.name.clone(), steps: s.steps.clone(), next: from, from, job: None });
+        self.active = Some(Active {
+            name: s.name.clone(),
+            steps: s.steps.clone(),
+            next: from,
+            from,
+            job: None,
+        });
         self.scenario_note = None;
         self.advance_scenario(cx);
     }
 
     /// Шаг закончился — запустить следующий; ошибка или ручная остановка обрывают сценарий, как в run_all.py.
     fn advance_scenario(&mut self, cx: &mut Context<Self>) {
-        let Some(mut a) = self.active.take() else { return };
+        let Some(mut a) = self.active.take() else {
+            return;
+        };
         let mut fail = |this: &mut Self, msg: String| {
             this.scenario_note = Some((false, msg));
             cx.notify();
@@ -3776,14 +5654,33 @@ impl Studio {
             }
             let ok = !job.stopped && matches!(job.out.lock().unwrap().exit, Some(Ok(())));
             if !ok {
-                let why = if job.stopped { "процесс остановлен вручную" } else { "шаг завершился с ошибкой, лог в «Трансляции»" };
-                return fail(self, format!("«{}» прерван на шаге {}: {why}. Продолжить можно кнопкой «Отсюда» у этого шага.", a.name, a.next));
+                let why = if job.stopped {
+                    "процесс остановлен вручную"
+                } else {
+                    "шаг завершился с ошибкой, лог в «Трансляции»"
+                };
+                return fail(
+                    self,
+                    format!(
+                        "«{}» прерван на шаге {}: {why}. Продолжить можно кнопкой «Отсюда» у этого шага.",
+                        a.name, a.next
+                    ),
+                );
             }
         }
         if a.next >= a.steps.len() {
-            let (summary, body) = (format!("Сценарий «{}» выполнен", a.name), format!("Шагов: {}", a.steps.len() - a.from));
+            let (summary, body) = (
+                format!("Сценарий «{}» выполнен", a.name),
+                format!("Шагов: {}", a.steps.len() - a.from),
+            );
             self.scenario_note = Some((true, format!("{summary}. {body}.")));
-            std::thread::spawn(move || _ = notify_rust::Notification::new().appname("ML Studio").summary(&summary).body(&body).show());
+            std::thread::spawn(move || {
+                _ = notify_rust::Notification::new()
+                    .appname("ML Studio")
+                    .summary(&summary)
+                    .body(&body)
+                    .show()
+            });
             cx.notify();
             return;
         }
@@ -3793,9 +5690,19 @@ impl Studio {
         }
         if !step.fixed_params.is_null()
             && let Some(f) = Job::arg(&step.args, "--fixed-params")
-            && let Err(e) = std::fs::write(self.root.join(&f), serde_json::to_vec_pretty(&step.fixed_params).unwrap())
+            && let Err(e) = std::fs::write(
+                self.root.join(&f),
+                serde_json::to_vec_pretty(&step.fixed_params).unwrap(),
+            )
         {
-            return fail(self, format!("«{}», шаг {}: не удалось записать {f}: {e}", a.name, a.next + 1));
+            return fail(
+                self,
+                format!(
+                    "«{}», шаг {}: не удалось записать {f}: {e}",
+                    a.name,
+                    a.next + 1
+                ),
+            );
         }
         let python = self.python.read(cx).value().trim().to_string();
         let tab = self.tab;
@@ -3822,19 +5729,59 @@ impl Studio {
 
     /// Новый шаг подбора: копия последнего шага hpo (обычно меняют только класс), иначе значения по умолчанию.
     fn add_hpo_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let last = self.scenarios.get(self.sel_scenario).and_then(|s| s.steps.iter().rev().find(|st| st.args.iter().any(|a| a == "hpo_pointnet.py")).cloned());
+        let last = self.scenarios.get(self.sel_scenario).and_then(|s| {
+            s.steps
+                .iter()
+                .rev()
+                .find(|st| st.args.iter().any(|a| a == "hpo_pointnet.py"))
+                .cloned()
+        });
         let step = last.unwrap_or_else(|| {
-            let data = self.datasets.iter().find(|d| d.name == "exports").or(self.datasets.first()).map_or("exports".into(), |d| d.name.clone());
-            let args = ["-u", "hpo_pointnet.py", "--data-dir", &data, "--output-dir", "runs/ground_xyz", "--target", "ground", "--features", "xyz"]
-                .into_iter()
-                .chain(["--n-trials", "25", "--epochs", "10", "--seed", "42", "--workers", "0"])
-                .map(String::from)
-                .collect();
-            scenario::Step { title: "ground_xyz".into(), args, fixed_params: serde_json::Value::Null }
+            let data = self
+                .datasets
+                .iter()
+                .find(|d| d.name == "exports")
+                .or(self.datasets.first())
+                .map_or("exports".into(), |d| d.name.clone());
+            let args = [
+                "-u",
+                "hpo_pointnet.py",
+                "--data-dir",
+                &data,
+                "--output-dir",
+                "runs/ground_xyz",
+                "--target",
+                "ground",
+                "--features",
+                "xyz",
+            ]
+            .into_iter()
+            .chain([
+                "--n-trials",
+                "25",
+                "--epochs",
+                "10",
+                "--seed",
+                "42",
+                "--workers",
+                "0",
+            ])
+            .map(String::from)
+            .collect();
+            scenario::Step {
+                title: "ground_xyz".into(),
+                args,
+                fixed_params: serde_json::Value::Null,
+            }
         });
         let mut step = step;
         // Копия последнего шага писала бы в тот же runs/<имя>: берём первый класс, которого в сценарии ещё нет.
-        let used: Vec<String> = self.scenarios.get(self.sel_scenario).map_or(vec![], |s| s.steps.iter().filter_map(|st| Job::arg(&st.args, "--output-dir")).collect());
+        let used: Vec<String> = self.scenarios.get(self.sel_scenario).map_or(vec![], |s| {
+            s.steps
+                .iter()
+                .filter_map(|st| Job::arg(&st.args, "--output-dir"))
+                .collect()
+        });
         let free = TARGETS.iter().find(|t| {
             let mut a = step.args.clone();
             set_arg(&mut a, "--target", t.to_string());
@@ -3845,7 +5792,11 @@ impl Studio {
             let name = auto_name(&step.args);
             set_arg(&mut step.args, "--output-dir", format!("runs/{name}"));
             if step.args.iter().any(|a| a == "--fixed-params") {
-                set_arg(&mut step.args, "--fixed-params", format!("runs/{name}.params.json"));
+                set_arg(
+                    &mut step.args,
+                    "--fixed-params",
+                    format!("runs/{name}.params.json"),
+                );
             }
             step.title = name;
         }
@@ -3857,74 +5808,126 @@ impl Studio {
 
     /// Шаг №7: сводный отчёт по всем прогонам, как в run_all.py.
     fn add_report_step(&mut self) {
-        let args = ["-u", "summary_report.py", "runs", "--out", "runs/report.md"].map(String::from).to_vec();
-        self.add_step(scenario::Step { title: "Сводный отчёт".into(), args, fixed_params: serde_json::Value::Null });
+        let args = ["-u", "summary_report.py", "runs", "--out", "runs/report.md"]
+            .map(String::from)
+            .to_vec();
+        self.add_step(scenario::Step {
+            title: "Сводный отчёт".into(),
+            args,
+            fixed_params: serde_json::Value::Null,
+        });
     }
 
     fn open_step_editor(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(st) = self.scenarios.get(self.sel_scenario).and_then(|s| s.steps.get(i)) else { return };
+        let Some(st) = self
+            .scenarios
+            .get(self.sel_scenario)
+            .and_then(|s| s.steps.get(i))
+        else {
+            return;
+        };
         let val = |k: &str| Job::arg(&st.args, k).unwrap_or_default();
-        let name = Job::arg(&st.args, "--output-dir").map(|d| d.trim_start_matches("runs/").to_string()).unwrap_or_default();
-        let gamma = Some(val("--focal-gamma")).filter(|g| !g.is_empty()).unwrap_or_else(|| "2".into());
-        let fields = [("--output-dir", name), ("--n-trials", val("--n-trials")), ("--epochs", val("--epochs")), ("--seed", val("--seed")), ("--focal-gamma", gamma)];
+        let name = Job::arg(&st.args, "--output-dir")
+            .map(|d| d.trim_start_matches("runs/").to_string())
+            .unwrap_or_default();
+        let gamma = Some(val("--focal-gamma"))
+            .filter(|g| !g.is_empty())
+            .unwrap_or_else(|| "2".into());
+        let fields = [
+            ("--output-dir", name),
+            ("--n-trials", val("--n-trials")),
+            ("--epochs", val("--epochs")),
+            ("--seed", val("--seed")),
+            ("--focal-gamma", gamma),
+        ];
         let mut inputs = vec![];
         let mut subs = vec![];
         for (key, v) in fields {
             let input = cx.new(|cx| InputState::new(window, cx).default_value(v));
-            subs.push(cx.subscribe_in(&input, window, move |this, input, ev: &gpui_kit::component::input::InputEvent, window, cx| {
-                if !matches!(ev, gpui_kit::component::input::InputEvent::Change) {
-                    return;
-                }
-                let v = input.read(cx).value().trim().to_string();
-                if key == "--focal-gamma" {
-                    return this.set_step_choice(key, v, window, cx);
-                }
-                let Some(i) = this.step_edit.as_ref().map(|e| e.idx) else { return };
-                this.edit_steps(|steps| {
-                    let Some(st) = steps.get_mut(i) else { return };
-                    if key == "--output-dir" {
-                        set_arg(&mut st.args, key, format!("runs/{v}"));
-                        if st.args.iter().any(|a| a == "--fixed-params") {
-                            set_arg(&mut st.args, "--fixed-params", format!("runs/{v}.params.json"));
-                        }
-                        st.title = v;
-                    } else {
-                        set_arg(&mut st.args, key, v);
+            subs.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, input, ev: &gpui_kit::component::input::InputEvent, window, cx| {
+                    if !matches!(ev, gpui_kit::component::input::InputEvent::Change) {
+                        return;
                     }
-                });
-                cx.notify();
-            }));
+                    let v = input.read(cx).value().trim().to_string();
+                    if key == "--focal-gamma" {
+                        return this.set_step_choice(key, v, window, cx);
+                    }
+                    let Some(i) = this.step_edit.as_ref().map(|e| e.idx) else {
+                        return;
+                    };
+                    this.edit_steps(|steps| {
+                        let Some(st) = steps.get_mut(i) else { return };
+                        if key == "--output-dir" {
+                            set_arg(&mut st.args, key, format!("runs/{v}"));
+                            if st.args.iter().any(|a| a == "--fixed-params") {
+                                set_arg(
+                                    &mut st.args,
+                                    "--fixed-params",
+                                    format!("runs/{v}.params.json"),
+                                );
+                            }
+                            st.title = v;
+                        } else {
+                            set_arg(&mut st.args, key, v);
+                        }
+                    });
+                    cx.notify();
+                },
+            ));
             inputs.push(input);
         }
-        let fixed = self.scenarios[self.sel_scenario].steps[i].fixed_params.as_object().cloned().unwrap_or_default();
+        let fixed = self.scenarios[self.sel_scenario].steps[i]
+            .fixed_params
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
         let mut params = vec![];
         for (k, spec) in SPACE.iter().enumerate() {
             if matches!(spec.kind, Kind::Choice(_)) {
                 params.push(None);
                 continue;
             }
-            let v = fixed.get(spec.key).cloned().unwrap_or_else(|| spec.middle());
+            let v = fixed
+                .get(spec.key)
+                .cloned()
+                .unwrap_or_else(|| spec.middle());
             let input = cx.new(|cx| InputState::new(window, cx).default_value(spec.show(&v)));
-            subs.push(cx.subscribe(&input, move |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
-                if !matches!(ev, gpui_kit::component::input::InputEvent::Change) {
-                    return;
-                }
-                // Неверное значение не пишется: в файле остаётся последнее верное, ошибка видна под полем.
-                if let Ok(v) = SPACE[k].parse(&input.read(cx).value()) {
-                    this.edit_fixed(|m| _ = m.insert(SPACE[k].key.into(), v));
-                }
-                cx.notify();
-            }));
+            subs.push(cx.subscribe(
+                &input,
+                move |this, input, ev: &gpui_kit::component::input::InputEvent, cx| {
+                    if !matches!(ev, gpui_kit::component::input::InputEvent::Change) {
+                        return;
+                    }
+                    // Неверное значение не пишется: в файле остаётся последнее верное, ошибка видна под полем.
+                    if let Ok(v) = SPACE[k].parse(&input.read(cx).value()) {
+                        this.edit_fixed(|m| _ = m.insert(SPACE[k].key.into(), v));
+                    }
+                    cx.notify();
+                },
+            ));
             params.push(Some(input));
         }
-        self.step_edit = Some(StepEditor { idx: i, inputs, params, _subs: subs });
+        self.step_edit = Some(StepEditor {
+            idx: i,
+            inputs,
+            params,
+            _subs: subs,
+        });
     }
 
     /// Изменить свою конфигурацию открытого шага (в режиме Optuna её нет — ничего не делает).
     fn edit_fixed(&mut self, f: impl FnOnce(&mut Params)) {
-        let Some(i) = self.step_edit.as_ref().map(|e| e.idx) else { return };
+        let Some(i) = self.step_edit.as_ref().map(|e| e.idx) else {
+            return;
+        };
         self.edit_steps(|steps| {
-            if let Some(m) = steps.get_mut(i).and_then(|st| st.fixed_params.as_object_mut()) {
+            if let Some(m) = steps
+                .get_mut(i)
+                .and_then(|st| st.fixed_params.as_object_mut())
+            {
                 f(m);
             }
         });
@@ -3932,12 +5935,22 @@ impl Studio {
 
     /// Optuna ↔ своя конфигурация. Своя: файл runs/<имя>.params.json и 1 trial — обучить ровно её.
     fn set_step_custom(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(e) = self.step_edit.as_ref() else { return };
+        let Some(e) = self.step_edit.as_ref() else {
+            return;
+        };
         let (i, trials) = (e.idx, e.inputs[1].clone());
         let params: Params = SPACE
             .iter()
             .zip(&e.params)
-            .map(|(spec, input)| (spec.key.to_string(), input.as_ref().and_then(|inp| spec.parse(&inp.read(cx).value()).ok()).unwrap_or_else(|| spec.middle())))
+            .map(|(spec, input)| {
+                (
+                    spec.key.to_string(),
+                    input
+                        .as_ref()
+                        .and_then(|inp| spec.parse(&inp.read(cx).value()).ok())
+                        .unwrap_or_else(|| spec.middle()),
+                )
+            })
             .collect();
         self.edit_steps(|steps| {
             let Some(st) = steps.get_mut(i) else { return };
@@ -3958,7 +5971,9 @@ impl Studio {
 
     /// Конфигурация лучшего trial прогона — в редактор шага.
     fn step_params_from(&mut self, params: Params, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(inputs) = self.step_edit.as_ref().map(|e| e.params.clone()) else { return };
+        let Some(inputs) = self.step_edit.as_ref().map(|e| e.params.clone()) else {
+            return;
+        };
         self.edit_fixed(|m| {
             for spec in &SPACE {
                 if let Some(v) = params.get(spec.key) {
@@ -3975,8 +5990,16 @@ impl Studio {
     }
 
     /// Класс или признаки: имя вида <класс>_<признаки> следует за ними, своё имя не трогаем.
-    fn set_step_choice(&mut self, key: &'static str, v: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(e) = self.step_edit.as_ref() else { return };
+    fn set_step_choice(
+        &mut self,
+        key: &'static str,
+        v: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(e) = self.step_edit.as_ref() else {
+            return;
+        };
         let (i, name_input) = (e.idx, e.inputs[0].clone());
         let gamma = e.inputs[4].read(cx).value().trim().to_string();
         let mut rename = None;
@@ -3999,20 +6022,47 @@ impl Studio {
         cx.notify();
     }
 
-    fn render_step_editor(&self, st: &scenario::Step, p: Pal, cx: &mut Context<Self>) -> AnyElement {
-        let Some(e) = self.step_edit.as_ref() else { return div().into_any_element() };
+    fn render_step_editor(
+        &self,
+        st: &scenario::Step,
+        p: Pal,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(e) = self.step_edit.as_ref() else {
+            return div().into_any_element();
+        };
         let target = Job::arg(&st.args, "--target").unwrap_or_default();
         let features = Job::arg(&st.args, "--features").unwrap_or_default();
         let data = Job::arg(&st.args, "--data-dir").unwrap_or_default();
         let focal = Job::arg(&st.args, "--loss").as_deref() == Some("focal");
         let custom = st.fixed_params.as_object();
-        let label = |t: &str| div().w(px(110.)).flex_shrink_0().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child(t.to_string());
+        let label = |t: &str| {
+            div()
+                .w(px(110.))
+                .flex_shrink_0()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(p.muted)
+                .child(t.to_string())
+        };
         let row = |t: &str| h_flex().gap_3().items_center().child(label(t));
         let mut datasets: Vec<String> = self.datasets.iter().map(|d| d.name.clone()).collect();
         if !data.is_empty() && !datasets.contains(&data) {
             datasets.push(data.clone());
         }
-        let field = |t: &str, input: &Entity<InputState>| v_flex().gap_1().w(px(150.)).child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child(t.to_string())).child(Input::new(input));
+        let field = |t: &str, input: &Entity<InputState>| {
+            v_flex()
+                .gap_1()
+                .w(px(150.))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.muted)
+                        .child(t.to_string()),
+                )
+                .child(Input::new(input))
+        };
         v_flex()
             .mx_8()
             .mb_3()
@@ -4177,9 +6227,22 @@ impl Studio {
                 d.child(div().px_4().py_2().text_color(p.muted).child("Сценариев пока нет. Нажмите «+» или добавьте шаг кнопкой «В сценарий» на вкладке «Запуск»."))
             });
 
-        let note = self.scenario_note.clone().map(|(ok, n)| div().px_8().py_3().border_b_1().border_color(p.rule).font_weight(FontWeight::SEMIBOLD).text_color(if ok { p.win } else { p.loss }).child(n));
+        let note = self.scenario_note.clone().map(|(ok, n)| {
+            div()
+                .px_8()
+                .py_3()
+                .border_b_1()
+                .border_color(p.rule)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if ok { p.win } else { p.loss })
+                .child(n)
+        });
         let Some(s) = self.scenarios.get(self.sel_scenario) else {
-            return h_flex().size_full().child(list).child(v_flex().flex_1().children(note)).into_any_element();
+            return h_flex()
+                .size_full()
+                .child(list)
+                .child(v_flex().flex_1().children(note))
+                .into_any_element();
         };
         let this_live = active_name.as_ref() == Some(&s.name);
         let busy = self.active.is_some();
@@ -4199,47 +6262,81 @@ impl Studio {
                     .child(small_caps("Название · Enter — сохранить", p.muted))
                     .child(Input::new(&self.scenario_name)),
             )
-            .child(Button::new("scn-add").icon(Icon::new(Lucide::Plus)).label("Шаг").outline().disabled(this_live).tooltip("Подбор гиперпараметров для класса").on_click(cx.listener(
-                |this, _, window, cx| {
-                    this.add_hpo_step(window, cx);
-                    cx.notify();
-                },
-            )))
-            .child(Button::new("scn-report").icon(Icon::new(Lucide::FileText)).label("Отчёт").outline().disabled(this_live).tooltip("Сводный отчёт по всем прогонам (№7)").on_click(cx.listener(
-                |this, _, _, cx| {
-                    this.add_report_step();
-                    cx.notify();
-                },
-            )))
+            .child(
+                Button::new("scn-add")
+                    .icon(Icon::new(Lucide::Plus))
+                    .label("Шаг")
+                    .outline()
+                    .disabled(this_live)
+                    .tooltip("Подбор гиперпараметров для класса")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.add_hpo_step(window, cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("scn-report")
+                    .icon(Icon::new(Lucide::FileText))
+                    .label("Отчёт")
+                    .outline()
+                    .disabled(this_live)
+                    .tooltip("Сводный отчёт по всем прогонам (№7)")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_report_step();
+                        cx.notify();
+                    })),
+            )
             .child(if this_live {
-                Button::new("scn-stop").icon(Icon::new(Lucide::Square)).label("Остановить").danger().on_click(cx.listener(|this, _, _, cx| {
-                    this.stop_scenario();
-                    cx.notify();
-                }))
+                Button::new("scn-stop")
+                    .icon(Icon::new(Lucide::Square))
+                    .label("Остановить")
+                    .danger()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.stop_scenario();
+                        cx.notify();
+                    }))
             } else {
                 Button::new("scn-run")
                     .icon(Icon::new(Lucide::Play))
                     .label("Запустить сценарий")
                     .primary()
                     .disabled(busy || n == 0)
-                    .tooltip(if busy { "Уже идёт другой сценарий" } else { "Шаги пойдут по очереди; ошибка останавливает сценарий" })
+                    .tooltip(if busy {
+                        "Уже идёт другой сценарий"
+                    } else {
+                        "Шаги пойдут по очереди; ошибка останавливает сценарий"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.start_scenario(0, cx)))
             })
-            .child(Button::new("scn-del").icon(Icon::new(Lucide::Trash)).outline().tooltip("Удалить в корзину").disabled(this_live).on_click(cx.listener(|this, _, _, cx| {
-                if let Some(s) = this.scenarios.get(this.sel_scenario) {
-                    match s.delete(&this.root) {
-                        Ok(()) => {
-                            this.scenarios.remove(this.sel_scenario);
-                            this.step_edit = None;
-                            this.sel_scenario = this.sel_scenario.saturating_sub(1);
+            .child(
+                Button::new("scn-del")
+                    .icon(Icon::new(Lucide::Trash))
+                    .outline()
+                    .tooltip("Удалить в корзину")
+                    .disabled(this_live)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(s) = this.scenarios.get(this.sel_scenario) {
+                            match s.delete(&this.root) {
+                                Ok(()) => {
+                                    this.scenarios.remove(this.sel_scenario);
+                                    this.step_edit = None;
+                                    this.sel_scenario = this.sel_scenario.saturating_sub(1);
+                                }
+                                Err(e) => {
+                                    this.scenario_note =
+                                        Some((false, format!("Не удалось удалить: {e}")))
+                                }
+                            }
                         }
-                        Err(e) => this.scenario_note = Some((false, format!("Не удалось удалить: {e}"))),
-                    }
-                }
-                cx.notify();
-            })));
+                        cx.notify();
+                    })),
+            );
 
-        let mut steps = v_flex().id("scn-steps").flex_1().overflow_y_scrollbar().pb_8();
+        let mut steps = v_flex()
+            .id("scn-steps")
+            .flex_1()
+            .overflow_y_scrollbar()
+            .pb_8();
         if n == 0 {
             steps = steps.child(div().px_8().py_4().text_color(p.muted).child(
                 "Шагов нет. Нажмите «+ Шаг» и выберите класс, признаки и данные. Шаг со своей конфигурацией гиперпараметров добавляется из «Запуска» кнопкой «В сценарий».",
@@ -4247,15 +6344,24 @@ impl Studio {
         }
         for (i, st) in s.steps.iter().enumerate() {
             // Статус шага в идущем сценарии.
-            let status = self.active.as_ref().filter(|_| this_live).and_then(|a| match i {
-                i if i < a.from => None,
-                i if i + 1 < a.next => Some(("ГОТОВО", p.win)),
-                i if i + 1 == a.next => Some(("ИДЁТ", p.live)),
-                _ => Some(("ЖДЁТ", p.muted)),
-            });
+            let status = self
+                .active
+                .as_ref()
+                .filter(|_| this_live)
+                .and_then(|a| match i {
+                    i if i < a.from => None,
+                    i if i + 1 < a.next => Some(("ГОТОВО", p.win)),
+                    i if i + 1 == a.next => Some(("ИДЁТ", p.live)),
+                    _ => Some(("ЖДЁТ", p.muted)),
+                });
             let target = Job::arg(&st.args, "--target").unwrap_or_default();
             let edit = |id: &str, icon: Lucide, tip: &'static str, disabled: bool| {
-                Button::new(SharedString::from(format!("{id}-{i}"))).icon(Icon::new(icon)).ghost().xsmall().tooltip(tip).disabled(disabled || this_live)
+                Button::new(SharedString::from(format!("{id}-{i}")))
+                    .icon(Icon::new(icon))
+                    .ghost()
+                    .xsmall()
+                    .tooltip(tip)
+                    .disabled(disabled || this_live)
             };
             steps = steps.child(
                 h_flex()
@@ -4331,7 +6437,15 @@ impl Studio {
         h_flex()
             .size_full()
             .child(list)
-            .child(v_flex().flex_1().min_w_0().h_full().child(head).children(note).child(steps))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(head)
+                    .children(note)
+                    .child(steps),
+            )
             .into_any_element()
     }
 
@@ -4344,7 +6458,22 @@ impl Studio {
             let frac = frac.clamp(0., 1.);
             v_flex()
                 .gap_1()
-                .child(h_flex().gap_2().text_xs().child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().opacity(0.72).child(label)).child(div().flex_shrink_0().font_features(tnum()).child(value)))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .text_xs()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .opacity(0.72)
+                                .child(label),
+                        )
+                        .child(div().flex_shrink_0().font_features(tnum()).child(value)),
+                )
                 .child(
                     div()
                         .h(px(4.))
@@ -4352,7 +6481,13 @@ impl Studio {
                         .rounded_full()
                         .bg(p.rail_sel)
                         // Под нагрузкой ≥ 90 % полоса загорается: упор в ресурс виден издалека.
-                        .child(div().h_full().rounded_full().w(relative(frac as f32)).bg(if frac >= 0.9 { p.live } else { p.rail_ink.opacity(0.55) })),
+                        .child(div().h_full().rounded_full().w(relative(frac as f32)).bg(
+                            if frac >= 0.9 {
+                                p.live
+                            } else {
+                                p.rail_ink.opacity(0.55)
+                            },
+                        )),
                 )
         };
         let mut block = v_flex()
@@ -4361,20 +6496,45 @@ impl Studio {
             .gap_2p5()
             .text_color(p.rail_ink)
             .child(div().text_xs().opacity(0.7).child("РЕСУРСЫ"))
-            .child(meter("ЦП".into(), u.cpu as f64 / 100., format!("{:.0} %", u.cpu)))
+            .child(meter(
+                "ЦП".into(),
+                u.cpu as f64 / 100.,
+                format!("{:.0} %", u.cpu),
+            ))
             .child(meter(
                 "ОЗУ".into(),
-                if u.ram_total > 0 { u.ram_used as f64 / u.ram_total as f64 } else { 0. },
+                if u.ram_total > 0 {
+                    u.ram_used as f64 / u.ram_total as f64
+                } else {
+                    0.
+                },
                 format!("{} / {} ГБ", gb(u.ram_used as f64), gb(u.ram_total as f64)),
             ));
         for g in &u.gpus {
             let temp = g.temp.map_or(String::new(), |t| format!(" · {t:.0} °C"));
             block = block
-                .child(meter(g.name.clone(), g.util as f64 / 100., format!("{:.0} %{temp}", g.util)))
                 .child(meter(
-                    (if g.shared { "Общая память ГП" } else { "Видеопамять" }).into(),
-                    if g.mem_total_mb > 0. { g.mem_used_mb / g.mem_total_mb } else { 0. },
-                    format!("{} / {} ГБ", gb(g.mem_used_mb * 1024. * 1024.), gb(g.mem_total_mb * 1024. * 1024.)),
+                    g.name.clone(),
+                    g.util as f64 / 100.,
+                    format!("{:.0} %{temp}", g.util),
+                ))
+                .child(meter(
+                    (if g.shared {
+                        "Общая память ГП"
+                    } else {
+                        "Видеопамять"
+                    })
+                    .into(),
+                    if g.mem_total_mb > 0. {
+                        g.mem_used_mb / g.mem_total_mb
+                    } else {
+                        0.
+                    },
+                    format!(
+                        "{} / {} ГБ",
+                        gb(g.mem_used_mb * 1024. * 1024.),
+                        gb(g.mem_total_mb * 1024. * 1024.)
+                    ),
                 ));
         }
         if u.seq > 0 && u.gpus.is_empty() {
@@ -4388,7 +6548,10 @@ impl Studio {
     /// Переоткрывает студию на другом корне: всё состояние вкладок пересоздаётся.
     fn open_project(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if !projects::is_project(&root) {
-            self.projects_note = Some(format!("В {} нет hpo_pointnet.py — это не папка проекта.", show_path(&root)));
+            self.projects_note = Some(format!(
+                "В {} нет hpo_pointnet.py — это не папка проекта.",
+                show_path(&root)
+            ));
             cx.notify();
             return;
         }
@@ -4405,11 +6568,22 @@ impl Studio {
     }
 
     /// Копия модели в выбранный файл; ошибка — в шапке вкладки прогонов.
-    fn save_model(&mut self, src: PathBuf, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_new_path(src.parent().unwrap_or(&self.root), Some(&format!("{name}.pt")));
+    fn save_model(
+        &mut self,
+        src: PathBuf,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rx = cx.prompt_for_new_path(
+            src.parent().unwrap_or(&self.root),
+            Some(&format!("{name}.pt")),
+        );
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(dst))) = rx.await {
-                let err = std::fs::copy(&src, &dst).err().map(|e| format!("Не удалось сохранить модель в {}: {e}", show_path(&dst)));
+                let err = std::fs::copy(&src, &dst)
+                    .err()
+                    .map(|e| format!("Не удалось сохранить модель в {}: {e}", show_path(&dst)));
                 _ = this.update_in(cx, |this, _, cx| {
                     this.tab_error = err;
                     cx.notify();
@@ -4420,7 +6594,12 @@ impl Studio {
     }
 
     fn pick_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Открыть проект".into()) });
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Открыть проект".into()),
+        });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = rx.await
                 && let Some(p) = paths.pop()
@@ -4457,7 +6636,9 @@ impl Studio {
         let row = |key: &str, i: usize, path: &PathBuf, fav: bool, cx: &mut Context<Self>| {
             let current = *path == root;
             let ok = projects::is_project(path);
-            let name = path.file_name().map_or_else(|| show_path(path), |n| n.to_string_lossy().into_owned());
+            let name = path
+                .file_name()
+                .map_or_else(|| show_path(path), |n| n.to_string_lossy().into_owned());
             let (open, star, forget) = (path.clone(), path.clone(), path.clone());
             h_flex()
                 .id(SharedString::from(format!("{key}-{i}")))
@@ -4466,13 +6647,26 @@ impl Studio {
                 .gap_4()
                 .border_b_1()
                 .border_color(p.rule)
-                .when(!current && ok, |d| d.cursor_pointer().hover(|s| s.bg(p.raised)))
+                .when(!current && ok, |d| {
+                    d.cursor_pointer().hover(|s| s.bg(p.raised))
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("{key}-star-{i}")))
                         .cursor_pointer()
-                        .child(Icon::new(Lucide::Star).size_4().text_color(if fav { p.live } else { p.muted }))
-                        .tooltip(move |w, cx| Tooltip::new(if fav { "Убрать из избранного" } else { "В избранное" }).build(w, cx))
+                        .child(Icon::new(Lucide::Star).size_4().text_color(if fav {
+                            p.live
+                        } else {
+                            p.muted
+                        }))
+                        .tooltip(move |w, cx| {
+                            Tooltip::new(if fav {
+                                "Убрать из избранного"
+                            } else {
+                                "В избранное"
+                            })
+                            .build(w, cx)
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.projects.toggle_favorite(&star);
@@ -4487,14 +6681,32 @@ impl Studio {
                         .child(
                             h_flex()
                                 .gap_3()
-                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(if ok { p.ink } else { p.muted }).child(name))
-                                .when(current, |d| d.child(chip("ОТКРЫТ", p.win, rgb(0xFFFFFF).into(), false))),
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(if ok { p.ink } else { p.muted })
+                                        .child(name),
+                                )
+                                .when(current, |d| {
+                                    d.child(chip("ОТКРЫТ", p.win, rgb(0xFFFFFF).into(), false))
+                                }),
                         )
-                        .child(div().text_xs().text_color(p.muted).overflow_hidden().whitespace_nowrap().text_ellipsis().child(if ok {
-                            show_path(path)
-                        } else {
-                            format!("{} · папка не найдена или без hpo_pointnet.py", show_path(path))
-                        })),
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(p.muted)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(if ok {
+                                    show_path(path)
+                                } else {
+                                    format!(
+                                        "{} · папка не найдена или без hpo_pointnet.py",
+                                        show_path(path)
+                                    )
+                                }),
+                        ),
                 )
                 .when(!fav, |d| {
                     d.child(
@@ -4514,10 +6726,20 @@ impl Studio {
                             })),
                     )
                 })
-                .when(!current && ok, |d| d.on_click(cx.listener(move |this, _, window, cx| this.open_project(open.clone(), window, cx))))
+                .when(!current && ok, |d| {
+                    d.on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_project(open.clone(), window, cx)
+                    }))
+                })
         };
         let favs = self.projects.favorites.clone();
-        let recent: Vec<PathBuf> = self.projects.recent.iter().filter(|r| !self.projects.is_favorite(r)).cloned().collect();
+        let recent: Vec<PathBuf> = self
+            .projects
+            .recent
+            .iter()
+            .filter(|r| !self.projects.is_favorite(r))
+            .cloned()
+            .collect();
         let section = |title: &str| div().px_8().pt_6().pb_2().child(small_caps(title, p.muted));
         let mut list = v_flex().id("proj-list").flex_1().overflow_y_scroll();
         if !favs.is_empty() {
@@ -4528,7 +6750,13 @@ impl Studio {
         }
         list = list.child(section("НЕДАВНИЕ"));
         if recent.is_empty() {
-            list = list.child(div().px_8().py_2().text_color(p.muted).child("Пока пусто — откройте папку проекта."));
+            list = list.child(
+                div()
+                    .px_8()
+                    .py_2()
+                    .text_color(p.muted)
+                    .child("Пока пусто — откройте папку проекта."),
+            );
         }
         for (i, r) in recent.iter().enumerate() {
             list = list.child(row("rec", i, r, false, cx));
@@ -4536,8 +6764,18 @@ impl Studio {
         v_flex()
             .size_full()
             .child(head)
-            .when(busy, |d| d.child(div().px_8().py_3().text_color(p.loss).child("Идут процессы — другой проект можно открыть после их остановки.")))
-            .when_some(self.projects_note.clone(), |d, n| d.child(div().px_8().py_3().text_color(p.loss).child(n)))
+            .when(busy, |d| {
+                d.child(
+                    div()
+                        .px_8()
+                        .py_3()
+                        .text_color(p.loss)
+                        .child("Идут процессы — другой проект можно открыть после их остановки."),
+                )
+            })
+            .when_some(self.projects_note.clone(), |d, n| {
+                d.child(div().px_8().py_3().text_color(p.loss).child(n))
+            })
             .child(list)
             .into_any_element()
     }
@@ -4571,7 +6809,11 @@ impl Studio {
             return v_flex()
                 .size_full()
                 .child(head)
-                .child(div().px_8().py_6().text_color(p.muted).child("Ищу Python 3.11, видеокарту и пакеты — это занимает несколько секунд."))
+                .child(
+                    div().px_8().py_6().text_color(p.muted).child(
+                        "Ищу Python 3.11, видеокарту и пакеты — это занимает несколько секунд.",
+                    ),
+                )
                 .into_any_element();
         };
 
@@ -4588,13 +6830,28 @@ impl Studio {
                 .items_start()
                 .border_b_1()
                 .border_color(p.rule)
-                .child(div().w(px(28.)).flex_shrink_0().child(display(n, 28., p.muted)))
+                .child(
+                    div()
+                        .w(px(28.))
+                        .flex_shrink_0()
+                        .child(display(n, 28., p.muted)),
+                )
                 .child(
                     v_flex()
                         .flex_1()
                         .min_w_0()
                         .gap_1()
-                        .child(h_flex().gap_3().child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(title.to_string())).child(chip(status.0, status.1, rgb(0xFFFFFF).into(), false)))
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(p.ink)
+                                        .child(title.to_string()),
+                                )
+                                .child(chip(status.0, status.1, rgb(0xFFFFFF).into(), false)),
+                        )
                         .child(div().text_sm().text_color(p.muted).child(detail)),
                 )
         };
@@ -4607,7 +6864,9 @@ impl Studio {
         };
         let py_detail = match (&info.base, &info.venv) {
             (Some((path, ver)), _) => format!("Python {ver} · {}", show_path(path)),
-            (None, Some(_)) => "Не найден, но .venv311 уже создано — для обучения он не нужен.".into(),
+            (None, Some(_)) => {
+                "Не найден, но .venv311 уже создано — для обучения он не нужен.".into()
+            }
             (None, None) => "Не найден. Нужен именно 3.11: для 3.12+ нет колёс pyg-lib.".into(),
         };
         let installer = env::install_python_cmd(info).map(|c| c.0);
@@ -4643,13 +6902,43 @@ impl Studio {
             },
             None => "Видеокарта NVIDIA не найдена (нет nvidia-smi) — обучение пойдёт на CPU, примерно вдвое и более медленнее.".into(),
         };
-        let gpu_row = row("2", if info.gpu.is_some() { ok } else { warn }, "Видеокарта и сборка torch", gpu_detail).child(
-            v_flex().items_end().gap_1().child(h_flex().gap_1().children(["cpu", "cu126", "cu128"].map(|b| {
-                choice(ElementId::Name(format!("build-{b}").into()), if b == recommended { format!("{b} ✓") } else { b.into() }, build == b).on_click(cx.listener(move |this, _, _, cx| {
-                    this.build = Some(b);
-                    cx.notify();
-                }))
-            }))).child(div().text_xs().text_color(p.muted).child(format!("рекомендуется {recommended}"))),
+        let gpu_row = row(
+            "2",
+            if info.gpu.is_some() { ok } else { warn },
+            "Видеокарта и сборка torch",
+            gpu_detail,
+        )
+        .child(
+            v_flex()
+                .items_end()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .children(["cpu", "cu126", "cu128"].map(|b| {
+                            choice(
+                                ElementId::Name(format!("build-{b}").into()),
+                                if b == recommended {
+                                    format!("{b} ✓")
+                                } else {
+                                    b.into()
+                                },
+                                build == b,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.build = Some(b);
+                                    cx.notify();
+                                },
+                            ))
+                        })),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(format!("рекомендуется {recommended}")),
+                ),
         );
 
         // 3. .venv311
@@ -4666,28 +6955,58 @@ impl Studio {
         // 4. Пакеты
         let mismatch = |p: &env::Packages| {
             let torch = p.torch().unwrap_or("");
-            (build != "cpu" && !p.cuda_available) || (build == "cpu" && torch.contains("+cu")) || !torch.ends_with(&format!("+{build}"))
+            (build != "cpu" && !p.cuda_available)
+                || (build == "cpu" && torch.contains("+cu"))
+                || !torch.ends_with(&format!("+{build}"))
         };
         let (pkg_status, pkg_detail) = match &info.packages {
             None => (bad, "Появятся после создания .venv311.".to_string()),
             Some(Err(e)) => (bad, format!("Проверка не удалась: {e}")),
-            Some(Ok(pk)) if !pk.missing().is_empty() => (bad, format!("Не хватает: {}.", pk.missing().join(", "))),
+            Some(Ok(pk)) if !pk.missing().is_empty() => {
+                (bad, format!("Не хватает: {}.", pk.missing().join(", ")))
+            }
             Some(Ok(pk)) => (
                 if mismatch(pk) { warn } else { ok },
                 format!(
                     "{} · CUDA {}{}",
-                    pk.versions.iter().map(|(m, v)| format!("{m} {}", v.as_deref().unwrap_or("—"))).collect::<Vec<_>>().join(", "),
-                    if pk.cuda_available { "доступна" } else { "недоступна" },
-                    if mismatch(pk) { format!(" · установлена не та сборка — нужна +{build}") } else { String::new() }
+                    pk.versions
+                        .iter()
+                        .map(|(m, v)| format!("{m} {}", v.as_deref().unwrap_or("—")))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if pk.cuda_available {
+                        "доступна"
+                    } else {
+                        "недоступна"
+                    },
+                    if mismatch(pk) {
+                        format!(" · установлена не та сборка — нужна +{build}")
+                    } else {
+                        String::new()
+                    }
                 ),
             ),
         };
         let can_install = !busy && (info.venv.is_some() || info.base.is_some());
         let installed = matches!(&info.packages, Some(Ok(pk)) if pk.missing().is_empty());
-        let pkg_row = row("4", pkg_status, "Пакеты: torch, pyg-lib, torch-geometric, torch-pointcloud, optuna", pkg_detail).child(
+        let pkg_row = row(
+            "4",
+            pkg_status,
+            "Пакеты: torch, pyg-lib, torch-geometric, torch-pointcloud, optuna",
+            pkg_detail,
+        )
+        .child(
             Button::new("env-install")
                 .icon(Icon::new(Lucide::ArrowDownToLine))
-                .label(format!("{} torch {}+{build}", if installed { "Переустановить:" } else { "Установить:" }, env::TORCH))
+                .label(format!(
+                    "{} torch {}+{build}",
+                    if installed {
+                        "Переустановить:"
+                    } else {
+                        "Установить:"
+                    },
+                    env::TORCH
+                ))
                 .primary()
                 .small()
                 .disabled(!can_install)
@@ -4730,7 +7049,10 @@ impl Render for Studio {
         if let Some(d) = self.pending_data.take() {
             Self::set_input(&self.data_dir, d, window, cx);
         }
-        let cur = self.scenarios.get(self.sel_scenario).map(|s| s.name.clone());
+        let cur = self
+            .scenarios
+            .get(self.sel_scenario)
+            .map(|s| s.name.clone());
         if self.tab == Tab::Scenarios && cur != self.scenario_name_for {
             self.scenario_name_for = cur.clone();
             Self::set_input(&self.scenario_name, cur.unwrap_or_default(), window, cx);
@@ -4739,7 +7061,11 @@ impl Render for Studio {
         if self.tab == Tab::Runs && cur != self.note_for {
             // Сначала сменить note_for: событие Change от set_value должно относиться уже к новому прогону.
             self.note_for = cur;
-            let text = self.runs.get(self.sel_run).and_then(|r| r.studio.as_ref()?.get("note")?.as_str().map(String::from)).unwrap_or_default();
+            let text = self
+                .runs
+                .get(self.sel_run)
+                .and_then(|r| r.studio.as_ref()?.get("note")?.as_str().map(String::from))
+                .unwrap_or_default();
             Self::set_input(&self.note, text, window, cx);
         }
         let p = pal(self.dark);
@@ -4756,9 +7082,17 @@ impl Render for Studio {
                 .rounded_lg()
                 .cursor_pointer()
                 .text_color(p.rail_ink)
-                .when(!selected, |d| d.opacity(0.72).hover(|s| s.opacity(1.).bg(p.rail_sel)))
-                .when(selected, |d| d.bg(p.rail_sel).font_weight(FontWeight::SEMIBOLD))
-                .child(Icon::new(icon).size_4().when(selected, |i| i.text_color(p.win)))
+                .when(!selected, |d| {
+                    d.opacity(0.72).hover(|s| s.opacity(1.).bg(p.rail_sel))
+                })
+                .when(selected, |d| {
+                    d.bg(p.rail_sel).font_weight(FontWeight::SEMIBOLD)
+                })
+                .child(
+                    Icon::new(icon)
+                        .size_4()
+                        .when(selected, |i| i.text_color(p.win)),
+                )
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.tab = tab;
@@ -4781,28 +7115,46 @@ impl Render for Studio {
                     cx.notify();
                 }))
         };
-        let jobs = v_flex().children(self.jobs.iter().enumerate().rev().map(|(i, j)| {
-            let (label, bg, _) = j.status(&p);
-            h_flex()
-                .id(("job", i))
-                .mx_3()
-                .px_4()
-                .py_2()
-                .gap_2()
-                .rounded_lg()
-                .cursor_pointer()
-                .text_color(p.rail_ink)
-                .when(i == self.sel_job && self.tab == Tab::Live, |d| d.bg(p.rail_sel))
-                .hover(|s| s.bg(p.rail_sel))
-                .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(bg))
-                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_sm().child(j.run.clone()))
-                .child(div().text_xs().font_features(tnum()).opacity(0.8).child(if j.running() { hms(j.elapsed()) } else { label.to_lowercase() }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sel_job = i;
-                    this.tab = Tab::Live;
-                    cx.notify();
-                }))
-        }));
+        let jobs =
+            v_flex().children(self.jobs.iter().enumerate().rev().map(|(i, j)| {
+                let (label, bg, _) = j.status(&p);
+                h_flex()
+                    .id(("job", i))
+                    .mx_3()
+                    .px_4()
+                    .py_2()
+                    .gap_2()
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .text_color(p.rail_ink)
+                    .when(i == self.sel_job && self.tab == Tab::Live, |d| {
+                        d.bg(p.rail_sel)
+                    })
+                    .hover(|s| s.bg(p.rail_sel))
+                    .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(bg))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_sm()
+                            .child(j.run.clone()),
+                    )
+                    .child(div().text_xs().font_features(tnum()).opacity(0.8).child(
+                        if j.running() {
+                            hms(j.elapsed())
+                        } else {
+                            label.to_lowercase()
+                        },
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.sel_job = i;
+                        this.tab = Tab::Live;
+                        cx.notify();
+                    }))
+            }));
         let dark = self.dark;
         let rail = v_flex()
             .w(px(220.))
@@ -4811,10 +7163,30 @@ impl Render for Studio {
             .bg(p.rail)
             .border_r_1()
             .border_color(p.rule)
-            .child(div().px_5().pt_5().pb_4().child(display("ML Studio", 28., p.rail_ink)))
+            .child(
+                div()
+                    .px_5()
+                    .pt_5()
+                    .pb_4()
+                    .child(display("ML Studio", 28., p.rail_ink)),
+            )
             .child(nav(Tab::Projects, Lucide::FolderOpen, "Проекты".into(), cx))
-            .child(nav(Tab::Live, Lucide::Radio, if live > 0 { format!("Трансляция · {live}") } else { "Трансляция".into() }, cx))
-            .child(nav(Tab::Runs, Lucide::ListOrdered, format!("Прогоны · {}", self.runs.len()), cx))
+            .child(nav(
+                Tab::Live,
+                Lucide::Radio,
+                if live > 0 {
+                    format!("Трансляция · {live}")
+                } else {
+                    "Трансляция".into()
+                },
+                cx,
+            ))
+            .child(nav(
+                Tab::Runs,
+                Lucide::ListOrdered,
+                format!("Прогоны · {}", self.runs.len()),
+                cx,
+            ))
             .child(nav(Tab::Launch, Lucide::Play, "Запуск".into(), cx))
             .child(nav(
                 Tab::Scenarios,
@@ -4825,11 +7197,40 @@ impl Render for Studio {
                 },
                 cx,
             ))
-            .child(nav(Tab::Datasets, Lucide::Database, format!("Датасеты · {}", self.datasets.len()), cx))
-            .child(nav(Tab::Testing, Lucide::FlaskConical, "Тестирование".into(), cx))
-            .child(nav(Tab::Env, Lucide::Settings2, if self.env_ready() { "Окружение".into() } else { "Окружение · !".into() }, cx))
+            .child(nav(
+                Tab::Datasets,
+                Lucide::Database,
+                format!("Датасеты · {}", self.datasets.len()),
+                cx,
+            ))
+            .child(nav(
+                Tab::Testing,
+                Lucide::FlaskConical,
+                "Тестирование".into(),
+                cx,
+            ))
+            .child(nav(
+                Tab::Env,
+                Lucide::Settings2,
+                if self.env_ready() {
+                    "Окружение".into()
+                } else {
+                    "Окружение · !".into()
+                },
+                cx,
+            ))
             .when(!self.jobs.is_empty(), |d| {
-                d.child(div().px_4().pt_6().pb_1().text_xs().text_color(p.rail_ink).opacity(0.7).child("ПРОЦЕССЫ")).child(jobs)
+                d.child(
+                    div()
+                        .px_4()
+                        .pt_6()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(p.rail_ink)
+                        .opacity(0.7)
+                        .child("ПРОЦЕССЫ"),
+                )
+                .child(jobs)
             })
             .child(div().flex_1())
             .child(self.render_usage(p))
@@ -4840,7 +7241,16 @@ impl Render for Studio {
                     .gap_2()
                     .text_xs()
                     .text_color(p.rail_ink)
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().opacity(0.7).child(show_path(&self.root)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .opacity(0.7)
+                            .child(show_path(&self.root)),
+                    )
                     .child(
                         div()
                             .id("theme")
@@ -4851,8 +7261,14 @@ impl Render for Studio {
                             .border_1()
                             .border_color(p.rule)
                             .hover(|s| s.bg(p.rail_sel))
-                            .child(if dark { "Тема: тёмная" } else { "Тема: светлая" })
-                            .on_click(cx.listener(move |this, _, window, cx| this.set_dark(!dark, window, cx))),
+                            .child(if dark {
+                                "Тема: тёмная"
+                            } else {
+                                "Тема: светлая"
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.set_dark(!dark, window, cx)
+                            })),
                     ),
             );
         let body = match self.tab {
@@ -4869,7 +7285,18 @@ impl Render for Studio {
         let body = v_flex()
             .size_full()
             .when_some(self.tab_error.clone(), |d, e| {
-                d.child(div().px_8().py_2().flex_shrink_0().border_b_1().border_color(p.rule).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.loss).child(e))
+                d.child(
+                    div()
+                        .px_8()
+                        .py_2()
+                        .flex_shrink_0()
+                        .border_b_1()
+                        .border_color(p.rule)
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.loss)
+                        .child(e),
+                )
             })
             .child(div().flex_1().min_h_0().child(body));
         h_flex()
@@ -4880,11 +7307,18 @@ impl Render for Studio {
             .text_sm()
             .child(rail)
             // Смена вкладки — короткое проявление; id зависит от вкладки, поэтому анимация запускается заново.
-            .child(div().flex_1().min_w_0().h_full().child(body).with_animation(
-                ElementId::Name(format!("tab-{}", self.tab as u8).into()),
-                Animation::new(Duration::from_millis(180)).with_easing(ease_in_out),
-                |el, t| el.opacity(t),
-            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(body)
+                    .with_animation(
+                        ElementId::Name(format!("tab-{}", self.tab as u8).into()),
+                        Animation::new(Duration::from_millis(180)).with_easing(ease_in_out),
+                        |el, t| el.opacity(t),
+                    ),
+            )
     }
 }
 
@@ -4901,21 +7335,44 @@ fn display(text: &str, size: f32, color: Hsla) -> Div {
 }
 
 fn small_caps(text: &str, color: Hsla) -> Div {
-    div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(color).child(text.to_uppercase())
+    div()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(text.to_uppercase())
 }
 
 fn stat_line(label: &str, value: String, color: Hsla, p: Pal) -> Div {
     h_flex()
         .gap_3()
-        .child(div().w(px(120.)).flex_shrink_0().text_xs().text_color(p.muted).child(label.to_string()))
+        .child(
+            div()
+                .w(px(120.))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(p.muted)
+                .child(label.to_string()),
+        )
         // min_w_0: длинное значение переносится в ширину карточки, а не вылезает за неё.
-        .child(div().min_w_0().font_features(tnum()).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
+        .child(
+            div()
+                .min_w_0()
+                .font_features(tnum())
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color)
+                .child(value),
+        )
 }
 
 /// Модель прогона: best_model.pt (пишет hpo_pointnet.py), у старых прогонов — best.pt лучшего trial.
 fn model_file(r: &Run) -> Option<PathBuf> {
     let trial = r.best.as_ref()?.get("best_trial")?.as_u64()?;
-    [r.path.join("best_model.pt"), r.path.join(format!("trial_{trial:04}")).join("best.pt")].into_iter().find(|p| p.exists())
+    [
+        r.path.join("best_model.pt"),
+        r.path.join(format!("trial_{trial:04}")).join("best.pt"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
 }
 
 /// Матрица ошибок 2×2 из best.json: строки — истина, столбцы — предсказание; насыщенность — доля строки.
@@ -4930,22 +7387,64 @@ fn confusion_matrix(title: &str, m: &serde_json::Value, color: Hsla, p: Pal) -> 
             .items_center()
             .justify_center()
             .bg(color.opacity(0.06 + 0.44 * share as f32))
-            .child(div().font_features(tnum()).font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(n(i, j).to_string()))
-            .child(div().font_features(tnum()).text_xs().text_color(p.ink).child(format!("{:.1}%", share * 100.)))
+            .child(
+                div()
+                    .font_features(tnum())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(p.ink)
+                    .child(n(i, j).to_string()),
+            )
+            .child(
+                div()
+                    .font_features(tnum())
+                    .text_xs()
+                    .text_color(p.ink)
+                    .child(format!("{:.1}%", share * 100.)),
+            )
     };
-    let label = |t: &str, w: f32| div().w(px(w)).text_xs().text_color(p.muted).child(t.to_string());
+    let label = |t: &str, w: f32| {
+        div()
+            .w(px(w))
+            .text_xs()
+            .text_color(p.muted)
+            .child(t.to_string())
+    };
     v_flex()
         .gap_1()
         .child(small_caps(&format!("Матрица ошибок · {title}"), p.muted))
-        .child(h_flex().gap_1().child(label("", 76.)).child(label("пред. фон", 104.)).child(label("пред. цель", 104.)))
-        .child(h_flex().gap_1().child(label("истина: фон", 76.)).child(cell(0, 0)).child(cell(0, 1)))
-        .child(h_flex().gap_1().child(label("истина: цель", 76.)).child(cell(1, 0)).child(cell(1, 1)))
+        .child(
+            h_flex()
+                .gap_1()
+                .child(label("", 76.))
+                .child(label("пред. фон", 104.))
+                .child(label("пред. цель", 104.)),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .child(label("истина: фон", 76.))
+                .child(cell(0, 0))
+                .child(cell(0, 1)),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .child(label("истина: цель", 76.))
+                .child(cell(1, 0))
+                .child(cell(1, 1)),
+        )
 }
 
 fn stat_big(label: &str, value: String, p: Pal) -> Div {
-    v_flex()
-        .child(small_caps(label, p.muted))
-        .child(div().font_family(DISPLAY).font_weight(FontWeight::BOLD).text_size(px(28.)).font_features(tnum()).text_color(p.ink).child(value))
+    v_flex().child(small_caps(label, p.muted)).child(
+        div()
+            .font_family(DISPLAY)
+            .font_weight(FontWeight::BOLD)
+            .text_size(px(28.))
+            .font_features(tnum())
+            .text_color(p.ink)
+            .child(value),
+    )
 }
 
 /// Плашка статуса; «в эфире» мерцает — единственное движение в интерфейсе.
@@ -4961,9 +7460,13 @@ fn chip(label: &'static str, bg: Hsla, fg: Hsla, live: bool) -> AnyElement {
         .font_weight(FontWeight::BOLD)
         .child(label);
     if live {
-        base.with_animation("live", Animation::new(Duration::from_millis(1600)).repeat().with_easing(ease_in_out), |el, t| {
-            el.opacity(0.65 + 0.35 * (1. - (2. * t - 1.).abs()))
-        })
+        base.with_animation(
+            "live",
+            Animation::new(Duration::from_millis(1600))
+                .repeat()
+                .with_easing(ease_in_out),
+            |el, t| el.opacity(0.65 + 0.35 * (1. - (2. * t - 1.).abs())),
+        )
         .into_any_element()
     } else {
         base.into_any_element()
@@ -4974,7 +7477,11 @@ fn chip(label: &'static str, bg: Hsla, fg: Hsla, live: bool) -> AnyElement {
 /// Отдельно от `trow`: там первая колонка — номер trial, а здесь нужна широкая колонка имени.
 fn scene_row<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Stateful<Div> {
     h_flex()
-        .id(ElementId::Name(if header { "sh".into() } else { cells.join("|").into() }))
+        .id(ElementId::Name(if header {
+            "sh".into()
+        } else {
+            cells.join("|").into()
+        }))
         .w_full()
         .px_4()
         .py_1p5()
@@ -4982,9 +7489,17 @@ fn scene_row<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Statef
         .border_b_1()
         .border_color(p.rule)
         .font_features(tnum())
-        .when(header, |d| d.text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted))
+        .when(header, |d| {
+            d.text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(p.muted)
+        })
         .children(cells.into_iter().enumerate().map(|(i, c)| {
-            let cell = div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(if header { c.to_uppercase() } else { c });
+            let cell = div()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(if header { c.to_uppercase() } else { c });
             match i {
                 0 => cell.w(px(24.)).flex_shrink_0().text_color(p.muted),
                 1 => cell.flex_1().min_w_0(),
@@ -4996,7 +7511,11 @@ fn scene_row<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Statef
 /// Строка таблицы: числа справа, табличные цифры, тонкая линейка.
 fn trow<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Stateful<Div> {
     h_flex()
-        .id(ElementId::Name(if header { "th".into() } else { cells.join("|").into() }))
+        .id(ElementId::Name(if header {
+            "th".into()
+        } else {
+            cells.join("|").into()
+        }))
         .w_full()
         .px_4()
         .py_1p5()
@@ -5004,13 +7523,25 @@ fn trow<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Stateful<Di
         .border_b_1()
         .border_color(p.rule)
         .font_features(tnum())
-        .when(header, |d| d.text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.muted))
+        .when(header, |d| {
+            d.text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(p.muted)
+        })
         .children(cells.into_iter().enumerate().map(|(i, c)| {
-            let cell = div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(if header { c.to_uppercase() } else { c });
+            let cell = div()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(if header { c.to_uppercase() } else { c });
             match i {
                 0 if N > 3 => cell.w(px(24.)).flex_shrink_0().text_color(p.muted),
                 0 => cell.flex_1().min_w_0(),
-                _ => cell.w(px(if N > 5 { 76. } else { 70. })).flex_shrink_0().flex().justify_end(),
+                _ => cell
+                    .w(px(if N > 5 { 76. } else { 70. }))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_end(),
             }
         }))
         // место под полосу длительности, чтобы заголовок совпадал со строками
@@ -5019,7 +7550,11 @@ fn trow<const N: usize>(cells: [String; N], header: bool, p: Pal) -> Stateful<Di
 
 /// Карточка: поверхность на ступень выше фона, тонкая рамка, скругление.
 fn card(p: Pal) -> Div {
-    h_flex().rounded_xl().bg(p.surface).border_1().border_color(p.rule)
+    h_flex()
+        .rounded_xl()
+        .bg(p.surface)
+        .border_1()
+        .border_color(p.rule)
 }
 
 /// Шапка прогона: карточка с лёгким оттенком цвета класса (вместо сплошной заливки).
@@ -5074,11 +7609,26 @@ fn band_button(id: &'static str, icon: Lucide, label: &str, bg: Hsla, fg: Hsla) 
 
 /// График F1 по эпохам: шкала Y и линия вылета (baseline + 0.05) прямо на графике.
 /// `floor` — нижняя граница, общая для нескольких графиков (сравнение прогонов в одном масштабе).
-fn f1_chart(id: impl Into<ElementId>, pts: Vec<(u32, f64)>, line: Option<f64>, floor: Option<f64>, stroke: Hsla) -> AnyElement {
-    let lo = pts.iter().map(|p| p.1).chain(line).chain(floor).fold(1.0f64, f64::min);
+fn f1_chart(
+    id: impl Into<ElementId>,
+    pts: Vec<(u32, f64)>,
+    line: Option<f64>,
+    floor: Option<f64>,
+    stroke: Hsla,
+) -> AnyElement {
+    let lo = pts
+        .iter()
+        .map(|p| p.1)
+        .chain(line)
+        .chain(floor)
+        .fold(1.0f64, f64::min);
     // Круглые деления: шаг 0.1, а при широком диапазоне 0.2; верх ровно 1.0 (без запаса сверху).
     let lo = ((lo - 0.05) * 10.).floor().max(0.) / 10.;
-    let (lo, step) = if 1.0 - lo > 0.55 { ((lo * 5.).floor() / 5., 0.2) } else { (lo, 0.1) };
+    let (lo, step) = if 1.0 - lo > 0.55 {
+        ((lo * 5.).floor() / 5., 0.2)
+    } else {
+        (lo, 0.1)
+    };
     let ticks = ((1.0 - lo) / step).round() as usize + 1;
     let chart = LineChart::new(pts)
         .id(id)
@@ -5119,8 +7669,15 @@ fn chart_title(text: &str, line: Option<f64>, p: Pal) -> Div {
 
 /// Имя прогона по умолчанию: <класс>_<признаки>, у Focal Loss — с суффиксом _focal (свой study).
 fn auto_name(args: &[String]) -> String {
-    let focal = focal_suffix(&Job::arg(args, "--loss").unwrap_or_default(), &Job::arg(args, "--focal-gamma").unwrap_or_default());
-    format!("{}_{}{focal}", Job::arg(args, "--target").unwrap_or_default(), Job::arg(args, "--features").unwrap_or_default())
+    let focal = focal_suffix(
+        &Job::arg(args, "--loss").unwrap_or_default(),
+        &Job::arg(args, "--focal-gamma").unwrap_or_default(),
+    );
+    format!(
+        "{}_{}{focal}",
+        Job::arg(args, "--target").unwrap_or_default(),
+        Job::arg(args, "--features").unwrap_or_default()
+    )
 }
 
 /// Суффикс имени прогона для loss: у Focal Loss и у каждой gamma свой study (gamma 2 — без числа, как в run_all.py).
@@ -5134,7 +7691,15 @@ fn focal_suffix(loss: &str, gamma: &str) -> String {
 
 /// Где сцена была при обучении прогона: train (метрики завышены), val, новая; «—» — неизвестно.
 fn scene_split(run: Option<&Run>, scene: &str) -> String {
-    let has = |k: &str| run.and_then(|r| r.split.as_ref()?.get(k)?.as_array().map(|a| a.iter().any(|v| v.as_str() == Some(scene))));
+    let has = |k: &str| {
+        run.and_then(|r| {
+            r.split
+                .as_ref()?
+                .get(k)?
+                .as_array()
+                .map(|a| a.iter().any(|v| v.as_str() == Some(scene)))
+        })
+    };
     match (has("train"), has("val")) {
         (Some(true), _) => "train".into(),
         (_, Some(true)) => "val".into(),
@@ -5154,7 +7719,11 @@ fn set_arg(args: &mut Vec<String>, key: &str, value: String) {
 /// Путь с разделителями текущей ОС (аргумент запуска мог прийти с «/»).
 fn show_path(p: &Path) -> String {
     let s = p.display().to_string();
-    if cfg!(windows) { s.replace('/', "\\") } else { s }
+    if cfg!(windows) {
+        s.replace('/', "\\")
+    } else {
+        s
+    }
 }
 
 /// 500000 → «500 000».
@@ -5177,14 +7746,30 @@ fn relegation(p: Pal) -> Div {
         .gap_2()
         .items_center()
         .child(div().h(px(2.)).flex_1().bg(p.loss))
-        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(p.loss).child("ЛИНИЯ BASELINE + 0.05"))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(p.loss)
+                .child("ЛИНИЯ BASELINE + 0.05"),
+        )
         .child(div().h(px(2.)).w(px(16.)).bg(p.loss))
 }
 
 /// Полоса, длина которой — точная доля от максимума (время trial, точки сцены).
 fn duration_bar(value: f64, max: f64, p: Pal) -> Div {
-    let frac = if max > 0. { (value / max).clamp(0., 1.) as f32 } else { 0. };
-    div().w(px(56.)).h(px(6.)).flex_shrink_0().rounded_full().bg(p.rule).child(div().h_full().rounded_full().w(relative(frac)).bg(p.muted))
+    let frac = if max > 0. {
+        (value / max).clamp(0., 1.) as f32
+    } else {
+        0.
+    };
+    div()
+        .w(px(56.))
+        .h(px(6.))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(p.rule)
+        .child(div().h_full().rounded_full().w(relative(frac)).bg(p.muted))
 }
 
 fn choice(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Button {
@@ -5199,7 +7784,11 @@ fn pipe(r: impl Read + Send + 'static, out: Arc<Mutex<Output>>) -> std::thread::
     std::thread::spawn(move || {
         let mut r = BufReader::new(r);
         let mut buf = vec![];
-        while r.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
+        while r
+            .read_until(b'\n', &mut buf)
+            .map(|n| n > 0)
+            .unwrap_or(false)
+        {
             let s = String::from_utf8_lossy(&buf);
             let s = s.trim_end_matches(['\n', '\r']);
             let line = s.rsplit('\r').next().unwrap_or(s).to_string();
@@ -5222,7 +7811,9 @@ fn kill(job: &Job) {
     }
     #[cfg(not(windows))]
     {
-        _ = Command::new("pkill").args(["-TERM", "-P", &pid.to_string()]).status();
+        _ = Command::new("pkill")
+            .args(["-TERM", "-P", &pid.to_string()])
+            .status();
         _ = Command::new("kill").arg(pid.to_string()).status();
     }
 }
@@ -5252,7 +7843,11 @@ fn find_root() -> PathBuf {
     if let Some(a) = std::env::args().nth(1) {
         return PathBuf::from(a);
     }
-    if let Some(last) = projects::Projects::load().recent.into_iter().find(|p| projects::is_project(p)) {
+    if let Some(last) = projects::Projects::load()
+        .recent
+        .into_iter()
+        .find(|p| projects::is_project(p))
+    {
         return last;
     }
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -5268,48 +7863,96 @@ fn find_root() -> PathBuf {
 /// Системное уведомление о конце процесса — прогоны идут часами, окно обычно свёрнуто.
 fn notify_end(job: &Job, out: &Output) {
     let ok = matches!(out.exit, Some(Ok(())));
-    let summary = format!("{}: {}", job.run, if ok { "завершён" } else { "ошибка" });
+    let summary = format!(
+        "{}: {}",
+        job.run,
+        if ok {
+            "завершён"
+        } else {
+            "ошибка"
+        }
+    );
     // У инференса нет trials: итог — сколько сцен посчитано и лучшая из них.
-    let scenes: Vec<&SceneMetrics> = job.scenes.iter().map(|(_, m)| m).filter(|m| !m.f1.is_nan()).collect();
-    let best = if job.predicting { scenes.iter().map(|m| m.f1).reduce(f64::max) } else { job.standings().first().map(|r| r.1) };
-    let line = if job.predicting { scenes.iter().find_map(|m| m.baseline) } else { job.baseline }.map(|b| b + MARGIN);
+    let scenes: Vec<&SceneMetrics> = job
+        .scenes
+        .iter()
+        .map(|(_, m)| m)
+        .filter(|m| !m.f1.is_nan())
+        .collect();
+    let best = if job.predicting {
+        scenes.iter().map(|m| m.f1).reduce(f64::max)
+    } else {
+        job.standings().first().map(|r| r.1)
+    };
+    let line = if job.predicting {
+        scenes.iter().find_map(|m| m.baseline)
+    } else {
+        job.baseline
+    }
+    .map(|b| b + MARGIN);
     let body = if ok {
-        let units = if job.predicting { format!("сцен: {} · ", scenes.len()) } else { String::new() };
+        let units = if job.predicting {
+            format!("сцен: {} · ", scenes.len())
+        } else {
+            String::new()
+        };
         match (best, line) {
-            (Some(b), Some(l)) => format!("{units}Лучший F1 {b:.4} — {} линии вылета {l:.4}", if b >= l { "выше" } else { "ниже" }),
+            (Some(b), Some(l)) => format!(
+                "{units}Лучший F1 {b:.4} — {} линии вылета {l:.4}",
+                if b >= l { "выше" } else { "ниже" }
+            ),
             (Some(b), None) => format!("{units}Лучший F1 {b:.4}"),
             _ => format!("За {}", hms(job.elapsed())),
         }
     } else {
         // последняя содержательная строка лога — обычно причина падения
-        out.lines.iter().rev().find(|l| !l.starts_with("===") && !l.trim().is_empty()).cloned().unwrap_or_default()
+        out.lines
+            .iter()
+            .rev()
+            .find(|l| !l.starts_with("===") && !l.trim().is_empty())
+            .cloned()
+            .unwrap_or_default()
     };
     // Вызов ОС может блокировать — не в UI-потоке.
-    std::thread::spawn(move || _ = notify_rust::Notification::new().appname("ML Studio").summary(&summary).body(&body).show());
+    std::thread::spawn(move || {
+        _ = notify_rust::Notification::new()
+            .appname("ML Studio")
+            .summary(&summary)
+            .body(&body)
+            .show()
+    });
 }
 
 fn main() {
     let root = find_root();
     // AllAssets: полный каталог Lucide (+~1 МБ), чтобы не перечислять иконки вручную.
-    gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(move |cx| {
-        gpui_kit::init(cx);
-        cx.text_system()
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../assets/fonts/PTSansNarrow-Bold.ttf")),
-                Cow::Borrowed(include_bytes!("../assets/fonts/GolosText.ttf")),
-                Cow::Borrowed(include_bytes!("../assets/fonts/PTMono.ttf")),
-            ])
-            .expect("шрифт PT Sans Narrow");
-        cx.on_window_closed(|cx, _| cx.quit()).detach();
-        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions { title: Some("ML Studio".into()), ..Default::default() }),
-            ..Default::default()
-        };
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Studio::new(root, window, cx))).expect("окно не открылось");
-        cx.activate(true);
-    });
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            cx.text_system()
+                .add_fonts(vec![
+                    Cow::Borrowed(include_bytes!("../assets/fonts/PTSansNarrow-Bold.ttf")),
+                    Cow::Borrowed(include_bytes!("../assets/fonts/GolosText.ttf")),
+                    Cow::Borrowed(include_bytes!("../assets/fonts/PTMono.ttf")),
+                ])
+                .expect("шрифт PT Sans Narrow");
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("ML Studio".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| Studio::new(root, window, cx))
+            })
+            .expect("окно не открылось");
+            cx.activate(true);
+        });
 }
 
 #[cfg(test)]
@@ -5325,7 +7968,10 @@ mod tests {
         assert!(out.lines.len() <= super::LOG_CAP);
         assert!(out.dropped > 0);
         // Номера сквозные: строка с индексом i в буфере — (dropped + i)-я с начала лога.
-        assert_eq!(out.lines.first().unwrap(), &format!("строка {}", out.dropped));
+        assert_eq!(
+            out.lines.first().unwrap(),
+            &format!("строка {}", out.dropped)
+        );
         assert_eq!(out.lines.last().unwrap(), &format!("строка {}", total - 1));
     }
 
@@ -5334,12 +7980,17 @@ mod tests {
         let mut a: Vec<String> = ["x", "--output-dir", "runs/a"].map(String::from).to_vec();
         super::set_arg(&mut a, "--output-dir", "runs/b".into());
         super::set_arg(&mut a, "--fixed-params", "p.json".into());
-        assert_eq!(a, ["x", "--output-dir", "runs/b", "--fixed-params", "p.json"]);
+        assert_eq!(
+            a,
+            ["x", "--output-dir", "runs/b", "--fixed-params", "p.json"]
+        );
     }
 
     #[test]
     fn auto_name() {
-        let mut a: Vec<String> = ["--target", "ground", "--features", "xyz"].map(String::from).to_vec();
+        let mut a: Vec<String> = ["--target", "ground", "--features", "xyz"]
+            .map(String::from)
+            .to_vec();
         assert_eq!(super::auto_name(&a), "ground_xyz");
         super::set_arg(&mut a, "--loss", "focal".into());
         assert_eq!(super::auto_name(&a), "ground_xyz_focal");
@@ -5363,13 +8014,30 @@ mod tests {
     #[test]
     fn predicting_log_fills_scenes() {
         let mut job = super::Job {
-            run: "Тест".into(), program: String::new(), args: vec![], pid: None,
-            out: Default::default(), started: std::time::Instant::now(), ended: None, stopped: false,
-            setup: false, log_path: None, predict: None, seen: 0, title: "Тест".into(),
-            target: "vegetation".into(), features: "xyz".into(),
-            segment_start: std::time::Instant::now(), epochs: vec![], baseline: None,
-            n_trials: 0, n_epochs: 0, predicting: true, scenes: vec![],
-            scene_progress: None, patch_progress: None,
+            run: "Тест".into(),
+            program: String::new(),
+            args: vec![],
+            pid: None,
+            out: Default::default(),
+            started: std::time::Instant::now(),
+            ended: None,
+            stopped: false,
+            setup: false,
+            log_path: None,
+            predict: None,
+            seen: 0,
+            title: "Тест".into(),
+            target: "vegetation".into(),
+            features: "xyz".into(),
+            segment_start: std::time::Instant::now(),
+            epochs: vec![],
+            baseline: None,
+            n_trials: 0,
+            n_epochs: 0,
+            predicting: true,
+            scenes: vec![],
+            scene_progress: None,
+            patch_progress: None,
         };
         for l in [
             "=== сцена 1/2: scene_001_cleaned.npy",
@@ -5381,7 +8049,16 @@ mod tests {
             if let Some((k, n, name)) = super::parse_scene_header(l) {
                 job.scene_progress = Some((k, n));
                 job.patch_progress = None;
-                job.scenes.push((name, super::SceneMetrics { f1: f64::NAN, precision: f64::NAN, recall: f64::NAN, baseline: None, uncovered: 0 }));
+                job.scenes.push((
+                    name,
+                    super::SceneMetrics {
+                        f1: f64::NAN,
+                        precision: f64::NAN,
+                        recall: f64::NAN,
+                        baseline: None,
+                        uncovered: 0,
+                    },
+                ));
             } else if let Some(m) = super::parse_scene_line(l) {
                 match job.scenes.last_mut() {
                     Some((_, slot)) => *slot = m,

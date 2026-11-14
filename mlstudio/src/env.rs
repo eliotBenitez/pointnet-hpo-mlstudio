@@ -38,6 +38,8 @@ pub struct EnvInfo {
     pub packages: Option<Result<Packages, String>>,
     pub uv: bool,
     pub winget: bool,
+    /// nevo.exe — редактор, куда экспортируются отчёты.
+    pub nevo: Option<PathBuf>,
 }
 
 impl EnvInfo {
@@ -152,6 +154,7 @@ pub fn detect(root: &Path) -> EnvInfo {
         gpu: find_gpu(root),
         uv: run("uv", &["--version"], root).is_some(),
         winget: cfg!(windows) && run("winget", &["--version"], root).is_some(),
+        nevo: crate::nevo::find(),
     }
 }
 
@@ -208,7 +211,7 @@ mod tests {
     fn cuda_version_and_build() {
         let smi = "| NVIDIA-SMI 570.86   Driver Version: 570.86   CUDA Version: 12.8     |";
         assert_eq!(parse_cuda(smi), Some((12, 8)));
-        let info = |cuda| EnvInfo { base: None, venv: None, gpu: Some(Gpu { name: "x".into(), cuda }), packages: None, uv: false, winget: false };
+        let info = |cuda| EnvInfo { base: None, venv: None, gpu: Some(Gpu { name: "x".into(), cuda }), packages: None, uv: false, winget: false, nevo: None };
         assert_eq!(info(Some((12, 9))).recommended_build(), "cu128");
         assert_eq!(info(Some((12, 6))).recommended_build(), "cu126");
         assert_eq!(info(Some((11, 8))).recommended_build(), "cpu");

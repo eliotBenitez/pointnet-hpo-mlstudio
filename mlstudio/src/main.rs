@@ -7500,6 +7500,33 @@ impl Studio {
                 })),
         );
 
+        // 5. Nevo — для обучения не нужен, только для экспорта отчётов.
+        let nevo_row = row(
+            "5",
+            if info.nevo.is_some() { ok } else { warn },
+            "Редактор Nevo",
+            match &info.nevo {
+                Some(n) => format!("{} · нужен для кнопки «В Nevo» в «Артефактах».", show_path(n)),
+                None => "Не найден — экспорт отчётов в Nevo не сработает. Для обучения не нужен.".into(),
+            },
+        )
+        .when(info.nevo.is_none(), |d| {
+            d.child(
+                Button::new("env-nevo")
+                    .icon(Icon::new(Lucide::ArrowDownToLine))
+                    .label("Скачать последний релиз")
+                    .primary()
+                    .small()
+                    .disabled(busy)
+                    .tooltip("Установщик Nevo для Windows с github.com/eliotBenitez/Nevo")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let a = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", nevo::INSTALL_PS];
+                        this.spawn_setup("powershell".into(), a.map(String::from).to_vec(), "Установка Nevo");
+                        cx.notify();
+                    })),
+            )
+        });
+
         let footer = div().px_8().py_4().text_sm().text_color(p.muted).child(if busy {
             "Идёт установка — лог в «Трансляции». После окончания окружение проверится заново.".to_string()
         } else if let Some(v) = info.venv.as_ref().filter(|_| self.env_ready()) {
@@ -7517,6 +7544,7 @@ impl Studio {
             .child(gpu_row)
             .child(venv_row)
             .child(pkg_row)
+            .child(nevo_row)
             .child(footer)
             .into_any_element()
     }

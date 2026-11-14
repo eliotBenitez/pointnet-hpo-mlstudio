@@ -7,17 +7,44 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-/// nevo.exe: переменная NEVO_EXE, затем типовые места установки, иначе поиск в PATH.
-fn nevo_exe() -> PathBuf {
+/// Установленный nevo.exe: переменная NEVO_EXE, типовые места установки (включая каталог установщика по умолчанию), затем PATH.
+pub fn find() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("NEVO_EXE") {
-        return p.into();
+        return Some(p.into());
     }
-    let mut candidates = vec![PathBuf::from(r"D:\Programs\Nevo\nevo.exe")];
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        candidates.insert(0, PathBuf::from(local).join(r"Programs\Nevo\nevo.exe"));
+    let mut candidates = vec![];
+    for (var, sub) in [("LOCALAPPDATA", r"Programs\Nevo"), ("LOCALAPPDATA", "Nevo"), ("ProgramFiles", "Nevo")] {
+        if let Some(base) = std::env::var_os(var) {
+            candidates.push(PathBuf::from(base).join(sub).join("nevo.exe"));
+        }
     }
-    candidates.into_iter().find(|p| p.exists()).unwrap_or_else(|| "nevo".into())
+    candidates.push(PathBuf::from(r"D:\Programs\Nevo\nevo.exe"));
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join("nevo.exe")));
+    }
+    candidates.into_iter().find(|p| p.is_file())
 }
+
+fn nevo_exe() -> PathBuf {
+    find().unwrap_or_else(|| "nevo".into())
+}
+
+/// PowerShell: скачать установщик последнего релиза Nevo для Windows с GitHub и запустить его.
+/// Ждём только сам установщик, а не запущенный им в конце Nevo.
+pub const INSTALL_PS: &str = r#"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$r = Invoke-RestMethod 'https://api.github.com/repos/eliotBenitez/Nevo/releases/latest'
+$a = $r.assets | Where-Object { $_.name -like '*_x64-setup.exe' } | Select-Object -First 1
+if (-not $a) { throw "В релизе $($r.tag_name) нет установщика *_x64-setup.exe" }
+$dir = Join-Path $env:TEMP 'mlstudio-nevo'; New-Item -ItemType Directory -Force $dir | Out-Null
+$f = Join-Path $dir $a.name
+Write-Output "Скачиваю $($a.name) ($([math]::Round($a.size / 1MB)) МБ, релиз $($r.tag_name))..."
+Invoke-WebRequest $a.browser_download_url -OutFile $f -UseBasicParsing
+Write-Output 'Запускаю установщик — завершите установку в его окне.'
+$p = Start-Process $f -PassThru; $p.WaitForExit()
+Write-Output "Установщик завершился с кодом $($p.ExitCode)."
+exit $p.ExitCode"#;
 
 /// Текст ответа инструмента или ошибка с сообщением от Nevo.
 fn tool_text(resp: &Value) -> Result<String, String> {

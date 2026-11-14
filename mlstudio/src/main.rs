@@ -5,6 +5,7 @@ mod cloud;
 mod data;
 mod env;
 mod monitor;
+mod nevo;
 mod projects;
 mod scenario;
 
@@ -518,6 +519,8 @@ struct Studio {
     pending_data: Option<String>,
     /// Сообщение под шапкой датасета (мини-копия: готово / ошибка).
     ds_note: Option<(bool, String)>,
+    /// Итог экспорта отчёта в Nevo: (успех, текст).
+    nevo_note: Option<(bool, String)>,
     log_scroll: UniformListScrollHandle,
     run_all: bool,
     target: &'static str,
@@ -683,6 +686,7 @@ impl Studio {
             pending_python: None,
             pending_data: None,
             ds_note: None,
+            nevo_note: None,
             preview: None,
             log_scroll: UniformListScrollHandle::new(),
             tab: if valid { Tab::Live } else { Tab::Projects },
@@ -1632,6 +1636,28 @@ impl Studio {
                     Err(e) => this.ds_note = Some((false, format!("Мини-копия не создана: {e}"))),
                 }
                 this.reload_datasets(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Отчёт → новая заметка Nevo через его MCP-мост. Повторный экспорт создаёт ещё одну заметку.
+    fn export_to_nevo(&mut self, title: String, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(markdown) = read_artifact(&path) else {
+            self.nevo_note = Some((false, format!("Не читается: {}", path.display())));
+            return cx.notify();
+        };
+        self.nevo_note = Some((true, format!("Отправляю «{title}» в Nevo…")));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let t = title.clone();
+            let res = cx.background_executor().spawn(async move { nevo::export(&t, &markdown) }).await;
+            _ = this.update(cx, |this, cx| {
+                this.nevo_note = Some(match res {
+                    Ok(_) => (true, format!("Заметка «{title}» создана в Nevo.")),
+                    Err(e) => (false, format!("Экспорт в Nevo не удался: {e}")),
+                });
+                cx.notify();
             });
         })
         .detach();
@@ -5361,6 +5387,7 @@ impl Studio {
                 .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(label))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.artifact_doc = Some(path.clone());
+                    this.nevo_note = None;
                     cx.notify();
                 }))
         };
@@ -5407,9 +5434,18 @@ impl Studio {
             .child(h_flex().flex_1().min_h_0().pt_4()
                 .child(selector)
                 .child(v_flex().flex_1().min_w_0().h_full()
-                    .when_some(document, |d, doc| d
-                        .child(div().px_8().pt_2().font_weight(FontWeight::SEMIBOLD).child(doc.title.clone()))
-                        .child(div().px_8().pt_1().text_xs().text_color(p.muted).child(show_path(&doc.path))))
+                    .when_some(document, |d, doc| {
+                        let (title, path) = (doc.title.clone(), doc.path.clone());
+                        d.child(h_flex().px_8().pt_2().gap_3().items_center()
+                            .child(v_flex().flex_1().min_w_0()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child(doc.title.clone()))
+                                .child(div().pt_1().text_xs().text_color(p.muted).child(show_path(&doc.path))))
+                            .when(document_text.is_some(), |h| h.child(
+                                band_button("artifact-nevo", Lucide::Share, "В Nevo", p.raised, p.ink)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.export_to_nevo(title.clone(), path.clone(), cx))))))
+                        .when_some(self.nevo_note.clone(), |d, (ok, note)| d.child(
+                            div().px_8().pt_2().text_sm().text_color(if ok { p.win } else { p.loss }).child(note)))
+                    })
                     .child(div().id("artifact-content").flex_1().min_h_0().overflow_y_scrollbar().px_8().py_4().child(content))))
             .into_any_element()
     }

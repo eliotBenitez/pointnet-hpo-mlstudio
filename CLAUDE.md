@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # CLAUDE.md
 
 PointNet++ hyperparameter search over LiDAR scenes (Python) + **ML Studio** (Rust/GPUI desktop app). Docs, UI text, and reports are in **Russian** — keep it that way.

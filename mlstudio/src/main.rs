@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! ML Studio: трансляция прогонов PointNet++ (hpo_pointnet.py / run_all.py), таблицы trials, запуск, датасеты.
+mod artifact_markdown;
 mod cloud;
 mod data;
 mod env;
@@ -130,6 +131,26 @@ fn tnum() -> FontFeatures {
 
 // ---------- процессы ----------
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ArtifactView {
+    #[default]
+    Documents,
+    Models,
+    Logs,
+}
+
+impl ArtifactView {
+    const ALL: [Self; 3] = [Self::Documents, Self::Models, Self::Logs];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Documents => "Документы",
+            Self::Models => "Модели",
+            Self::Logs => "Логи",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Live,
@@ -137,6 +158,7 @@ enum Tab {
     Launch,
     Datasets,
     Testing,
+    Artifacts,
     Env,
     Projects,
     Scenarios,
@@ -230,23 +252,6 @@ fn utc_stamp(secs: i64) -> String {
         rem / 60 % 60,
         rem % 60
     )
-}
-
-/// Последний лог-файл процесса с таким названием (название прогона = название процесса).
-fn latest_log(root: &Path, title: &str) -> Option<PathBuf> {
-    let mut logs: Vec<PathBuf> = std::fs::read_dir(root.join(LOG_DIR))
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|n| n.split_once("__"))
-                .is_some_and(|(t, _)| t == title)
-        })
-        .collect();
-    logs.sort();
-    logs.pop()
 }
 
 struct Epoch {
@@ -368,10 +373,13 @@ struct Preview {
     pred: Option<PredView>,
     /// Готовое предсказание, запрошенное до загрузки облака: подхватится, когда облако загрузится.
     pending: Option<PredJob>,
+    /// Размер картинки на экране (px) — для перевода сдвига мыши в долю кадра.
+    shown: Rc<std::cell::Cell<(f32, f32)>>,
 }
 
 /// Предсказание в превью: какая модель, была ли сцена в её val, результат (None — ещё считается).
 struct PredView {
+    request: Arc<()>,
     label: String,
     split: Option<&'static str>,
     result: Option<Result<cloud::Outcome, String>>,
@@ -383,17 +391,29 @@ struct PredJob {
     scene: PathBuf,
     out: PathBuf,
     target: String,
+    request: Arc<()>,
 }
 
 /// Модель, которой можно проверить сцену: лучший trial прогона с сохранённым best.pt.
+#[derive(Clone)]
 struct Model {
     run: String,
-    trial: u64,
+    /// None — модель из файла: номера trial у неё нет.
+    trial: Option<u64>,
     f1: Option<f64>,
     checkpoint: PathBuf,
     target: String,
     /// Где сцена была при обучении (по split.json прогона).
     split: Option<&'static str>,
+}
+
+impl Model {
+    fn label(&self) -> String {
+        match self.trial {
+            Some(t) => format!("{} · trial {t}", self.run),
+            None => self.run.clone(),
+        }
+    }
 }
 
 /// Что сделать по клику на сцену в таблице оценки (scene_table).
@@ -421,6 +441,21 @@ const PREVIEW_H: u32 = 800;
 
 // ---------- приложение ----------
 
+#[derive(Default)]
+struct ResourcesVisibility {
+    collapsed: bool,
+}
+
+impl ResourcesVisibility {
+    fn collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    fn toggle(&mut self) {
+        self.collapsed = !self.collapsed;
+    }
+}
+
 struct Studio {
     root: PathBuf,
     /// Последний замер ЦП, ОЗУ и видеокарт.
@@ -430,6 +465,7 @@ struct Studio {
     /// Почему выбранная папка не открылась.
     projects_note: Option<String>,
     dark: bool,
+    resources: ResourcesVisibility,
     tab: Tab,
     datasets: Vec<Dataset>,
     sel_dataset: usize,
@@ -499,6 +535,14 @@ struct Studio {
     patches_per_scene: Entity<InputState>,
     seed: Entity<InputState>,
     workers: Entity<InputState>,
+    /// Раздел «Артефакты»: выбранный документ и режим просмотра.
+    artifact_doc: Option<PathBuf>,
+    artifact_view: ArtifactView,
+    artifact_log: Option<String>,
+    /// Класс модели из файла (checkpoint → цель): определяется один раз.
+    model_targets: std::collections::HashMap<PathBuf, String>,
+    /// Кэш текста открытого артефакта: путь, размер и время изменения → содержимое.
+    artifact_text: Option<((PathBuf, u64, Option<std::time::SystemTime>), SharedString)>,
     /// «Тестирование»: ключ выбранной модели, датасет, сколько сцен, загруженные .pt, результат теста.
     test_model: Option<String>,
     /// Имя датасета (не номер: список датасетов пересканируется).
@@ -598,6 +642,7 @@ impl Studio {
             runs,
             datasets,
             dark,
+            resources: ResourcesVisibility::default(),
             sel_dataset: 0,
             sel_run: 0,
             sel_trial: None,
@@ -658,6 +703,11 @@ impl Studio {
             seed: input("42", ""),
             workers: input("0", ""),
             loss: "ce",
+            artifact_doc: None,
+            artifact_view: ArtifactView::Documents,
+            artifact_log: None,
+            model_targets: Default::default(),
+            artifact_text: None,
             test_model: None,
             test_dataset: None,
             test_scenes: input("10", ""),
@@ -1224,6 +1274,7 @@ impl Studio {
             last: None,
             dirty: false,
             pred: None,
+            shown: Rc::new(std::cell::Cell::new((PREVIEW_W as f32, PREVIEW_H as f32))),
             pending: None,
         });
         cx.spawn(async move |this, cx| {
@@ -1258,7 +1309,10 @@ impl Studio {
             .iter()
             .filter_map(|r| {
                 let trial = r.best.as_ref()?.get("best_trial")?.as_u64()?;
-                let checkpoint = r.path.join(format!("trial_{trial:04}")).join("best.pt");
+                let checkpoint = [
+                    r.path.join("best_model.pt"),
+                    r.path.join(format!("trial_{trial:04}")).join("best.pt"),
+                ].into_iter().find(|p| p.exists())?;
                 let in_list = |k: &str| {
                     r.split
                         .as_ref()?
@@ -1273,7 +1327,7 @@ impl Studio {
                 };
                 checkpoint.exists().then(|| Model {
                     run: r.name.clone(),
-                    trial,
+                    trial: Some(trial),
                     f1: r.best_f1(),
                     checkpoint,
                     target: r.target().unwrap_or_default(),
@@ -1281,15 +1335,73 @@ impl Studio {
                 })
             })
             .collect();
+        for checkpoint in artifact_models(&self.root, &self.runs) {
+            if out.iter().any(|m| m.checkpoint == checkpoint) {
+                continue;
+            }
+            let label = checkpoint
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "модель".into());
+            out.push(Model {
+                run: format!("Файл · {label}"),
+                trial: None,
+                f1: None,
+                checkpoint,
+                target: String::new(),
+                split: None,
+            });
+        }
         out.sort_by(|a, b| b.f1.unwrap_or(0.).total_cmp(&a.f1.unwrap_or(0.)));
         out
     }
 
     /// Проверить сцену превью моделью: готовое предсказание — сразу, иначе процесс predict_scene.py.
-    fn predict(&mut self, m: Model, cx: &mut Context<Self>) {
+    fn predict(&mut self, mut m: Model, cx: &mut Context<Self>) {
         let Some(scene) = self.preview.as_ref().map(|p| p.scene.clone()) else {
             return;
         };
+        let request = Arc::new(());
+        if m.target.is_empty() {
+            if let Some(t) = self.model_targets.get(&m.checkpoint) {
+                m.target = t.clone();
+            }
+        }
+        if m.target.is_empty() {
+            let python = self.python.read(cx).value().trim().to_string();
+            let checkpoint = m.checkpoint.clone();
+            if let Some(p) = self.preview.as_mut() {
+                p.pending = None;
+                p.pred = Some(PredView { request: request.clone(), label: m.run.clone(), split: None, result: None });
+            }
+            let root = self.root.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx.background_executor().spawn(async move {
+                    let output = Command::new(python).current_dir(root).args(["predict_scene.py", "--print-target", "--checkpoint"]).arg(&checkpoint).output().map_err(|e| e.to_string())?;
+                    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).into_owned()); }
+                    let target = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    if TARGETS.contains(&target.as_str()) { Ok(target) } else { Err("нет target".to_string()) }
+                }).await;
+                _ = this.update(cx, |this, cx| {
+                    if !this.preview.as_ref().is_some_and(|p| p.scene == scene && p.pred.as_ref().is_some_and(|pred| Arc::ptr_eq(&pred.request, &request))) { return; }
+                    match result {
+                        Ok(target) => {
+                            this.model_targets.insert(m.checkpoint.clone(), target.clone());
+                            let mut m = m;
+                            m.target = target;
+                            this.predict(m, cx);
+                        }
+                        Err(e) => {
+                            if let Some(pv) = this.preview.as_mut().and_then(|p| p.pred.as_mut()) {
+                                pv.result = Some(Err(format!("Не удалось определить параметры модели: {e}")));
+                            }
+                            cx.notify();
+                        }
+                    }
+                });
+            }).detach();
+            return;
+        }
         let stem = scene
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -1302,21 +1414,22 @@ impl Studio {
             .find(|r| r.name == m.run)
             .map(|r| r.path.clone())
             .unwrap_or_else(|| {
-                self.root
-                    .join(self.runs_dir.read(cx).value().trim().to_string())
-                    .join(&m.run)
+                self.root.join("tests").join(format!("preview_{}", m.checkpoint.file_stem().unwrap_or_default().to_string_lossy()))
             });
-        let out = base
-            .join("pred")
-            .join(format!("{stem}__trial{}.npy", m.trial));
+        let name = prediction_cache_name(&scene, &m.checkpoint);
+        remove_stale_predictions(&base.join("pred"), &name);
+        let out = base.join("pred").join(name);
         let job = PredJob {
             scene: scene.clone(),
             out: out.clone(),
             target: m.target.clone(),
+            request: request.clone(),
         };
         if let Some(p) = self.preview.as_mut() {
+            p.pending = None;
             p.pred = Some(PredView {
-                label: format!("{} · trial {}", m.run, m.trial),
+                request,
+                label: m.label(),
                 split: m.split,
                 result: None,
             });
@@ -1344,17 +1457,21 @@ impl Studio {
         ]
         .map(String::from)
         .to_vec();
+        let source_tab = self.tab;
         self.spawn(python, args, format!("Предсказание {} · {stem}", m.run));
         if let Some(j) = self.jobs.last_mut() {
             j.predict = Some(job);
             j.target = m.target.clone();
         }
-        self.tab = Tab::Datasets; // остаёмся у превью; лог — в «Трансляции»
+        self.tab = source_tab; // остаёмся у превью; лог — в «Трансляции»
         cx.notify();
     }
 
     /// Прочитать готовое предсказание в фоне и показать «Ошибки», если сцена всё ещё открыта.
     fn load_prediction(&mut self, pj: PredJob, cx: &mut Context<Self>) {
+        if !self.preview.as_ref().is_some_and(|p| p.scene == pj.scene && p.pred.as_ref().is_some_and(|pred| Arc::ptr_eq(&pred.request, &pj.request))) {
+            return;
+        }
         let Some(Some(Ok(cloud))) = self
             .preview
             .as_ref()
@@ -1378,7 +1495,7 @@ impl Studio {
                 .spawn(async move { cloud::load_pred(&out, &cloud, &target) })
                 .await;
             _ = this.update(cx, |this, cx| {
-                let Some(p) = this.preview.as_mut().filter(|p| p.scene == pj.scene) else {
+                let Some(p) = this.preview.as_mut().filter(|p| p.scene == pj.scene && p.pred.as_ref().is_some_and(|pred| Arc::ptr_eq(&pred.request, &pj.request))) else {
                     return;
                 };
                 if res.is_ok() {
@@ -2090,8 +2207,8 @@ impl Studio {
                 v_flex()
                     .items_end()
                     .gap_1()
-                    .child(stat_line("Идёт", elapsed, p.ink, p))
-                    .child(stat_line(
+                    .child(compact_stat_line("Идёт", elapsed, p.ink, p))
+                    .child(compact_stat_line(
                         "Сцена",
                         last.as_ref().map_or("—".into(), |(n, _)| n.clone()),
                         p.muted,
@@ -3008,8 +3125,11 @@ impl Studio {
             self.sel_dataset = i;
         }
         self.open_preview(scene.clone(), cx);
+        let request = Arc::new(());
         if let Some(p) = self.preview.as_mut() {
+            p.pending = None;
             p.pred = Some(PredView {
+                request: request.clone(),
                 label,
                 split: None,
                 result: None,
@@ -3020,6 +3140,7 @@ impl Studio {
                 scene,
                 out: pred,
                 target,
+                request,
             },
             cx,
         );
@@ -3888,7 +4009,7 @@ impl Studio {
                     })),
                 )
             })
-            .when_some(latest_log(&self.root, &r.name), |d, log| {
+            .when_some(artifact_log_path(&self.root, &r.name), |d, log| {
                 d.child(
                     icon_button("run-log", Lucide::FileText, "Открыть последний лог", p)
                         .on_click(move |_, _, _| open_path(&log)),
@@ -5088,6 +5209,211 @@ impl Studio {
             .into_any_element()
     }
 
+    /// Текст файла с кэшем: перечитывается только при смене пути, размера или времени изменения.
+    /// Показываются последние `max_lines` строк (лог растёт часами); копия `SharedString` дешёвая.
+    fn artifact_text(&mut self, path: &Path, max_lines: usize) -> Option<SharedString> {
+        let meta = std::fs::metadata(path).ok()?;
+        let key = (path.to_path_buf(), meta.len(), meta.modified().ok());
+        if let Some((k, text)) = &self.artifact_text {
+            if *k == key {
+                return Some(text.clone());
+            }
+        }
+        let mut text = read_artifact(path)?;
+        let n = text.lines().count();
+        if n > max_lines {
+            let tail: Vec<&str> = text.lines().skip(n - max_lines).collect();
+            text = format!("… показаны последние {max_lines} строк из {n}\n{}", tail.join("\n"));
+        }
+        let text = SharedString::from(text);
+        self.artifact_text = Some((key, text.clone()));
+        Some(text)
+    }
+
+    fn render_artifacts(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
+        let sidebar = |id: &'static str| {
+            v_flex().id(id).w(px(250.)).flex_shrink_0().h_full().overflow_y_scrollbar()
+                .border_r_1().border_color(p.rule).p_3().gap_1()
+        };
+        let tabs = h_flex()
+            .px_8()
+            .pt_6()
+            .border_b_1().border_color(p.rule)
+            .children(ArtifactView::ALL.into_iter().enumerate().map(|(i, view)| {
+                let active = self.artifact_view == view;
+                div().id(("artifact-tab", i)).px_3().py_3().cursor_pointer()
+                    .border_b_2().border_color(if active { p.ink } else { p.rule })
+                    .text_color(if active { p.ink } else { p.muted })
+                    .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                    .child(view.label())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.artifact_view = view;
+                        if view == ArtifactView::Models {
+                            this.imported = imported_models(&this.root);
+                        }
+                        cx.notify();
+                    }))
+            }));
+        if self.artifact_view == ArtifactView::Models {
+            // Тот же список, что в «Тестировании»: модель лучшего trial каждого прогона и models/*.pt.
+            let models = self.test_models();
+            let col = |w: f32| div().w(px(w)).flex_shrink_0();
+            let header = h_flex().px_8().py_2().gap_4().border_b_1().border_color(p.rule).text_xs().text_color(p.muted)
+                .child(div().flex_1().min_w_0().child("МОДЕЛЬ"))
+                .child(col(90.).child("F1"))
+                .child(col(90.).child("РАЗМЕР"))
+                .child(col(210.));
+            let rows = models.iter().enumerate().map(|(i, m)| {
+                let run = m.run.and_then(|i| self.runs.get(i));
+                let sub = match run {
+                    Some(r) => format!(
+                        "прогон · {} · {}",
+                        r.target().map_or("?".into(), |t| class_ru(&t).to_string()),
+                        r.features().unwrap_or_else(|| "?".into())
+                    ),
+                    None => format!("загружена · {MODELS_DIR}"),
+                };
+                let size = std::fs::metadata(&m.file).map_or("—".into(), |meta| human_bytes(meta.len()));
+                let key = m.key.clone();
+                let folder = m.file.parent().map(Path::to_path_buf).unwrap_or_default();
+                h_flex().id(("artifact-model", i)).px_8().py_2().gap_4().items_center().border_b_1().border_color(p.rule)
+                    .child(v_flex().flex_1().min_w_0()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(m.label.clone()))
+                        .child(div().text_xs().text_color(p.muted).child(sub))
+                        .child(div().text_xs().text_color(p.muted).overflow_hidden().whitespace_nowrap().text_ellipsis().child(show_path(&m.file))))
+                    .child(col(90.).font_features(tnum()).text_color(p.ink).child(fmt(run.and_then(|r| r.best_f1()))))
+                    .child(col(90.).font_features(tnum()).text_color(p.muted).child(size))
+                    .child(col(210.).child(h_flex().gap_2().justify_end()
+                        .child(Button::new(("artifact-model-test", i)).icon(Icon::new(Lucide::FlaskConical)).label("Тестировать").outline().small()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.test_model = Some(key.clone());
+                                this.tab = Tab::Testing;
+                                this.refresh_tests();
+                                cx.notify();
+                            })))
+                        .child(Button::new(("artifact-model-dir", i)).icon(Icon::new(Lucide::FolderOpen)).ghost().small()
+                            .tooltip("Открыть папку")
+                            .on_click(move |_, _, _| open_path(&folder)))))
+            }).collect::<Vec<_>>();
+            let body = v_flex().id("artifact-models").flex_1().min_h_0().overflow_y_scrollbar()
+                .child(header)
+                .children(rows)
+                .when(models.is_empty(), |d| d.child(div().px_8().py_4().text_color(p.muted)
+                    .child("Моделей пока нет: обучите прогон или загрузите .pt во вкладке «Тестирование».")));
+            return v_flex().size_full().child(tabs).child(body).into_any_element();
+        }
+        if self.artifact_view == ArtifactView::Logs {
+            let logs: Vec<(String, PathBuf)> = self.runs.iter().filter_map(|r| artifact_log_path(&self.root, &r.name).map(|path| (r.name.clone(), path))).collect();
+            let selected = self.artifact_log.as_ref().and_then(|name| logs.iter().position(|(n, _)| n == name)).unwrap_or(0);
+            let list = sidebar("artifact-log-runs")
+                .child(div().px_3().text_xs().text_color(p.muted).child("ПРОГОНЫ С ЛОГАМИ"))
+                .when(logs.is_empty(), |d| d.child(div().p_3().text_color(p.muted).child("Сохранённые логи не найдены")))
+                .children(logs.iter().enumerate().map(|(i, (name, _))| {
+                    let name = name.clone();
+                    div().id(("artifact-log-run", i)).px_3().py_2().rounded_md().cursor_pointer()
+                        .when(i == selected, |d| d.bg(p.raised).font_weight(FontWeight::SEMIBOLD))
+                        .child(name.clone()).on_click(cx.listener(move |this, _, _, cx| {
+                            this.artifact_log = Some(name.clone());
+                            cx.notify();
+                        }))
+                }));
+            let detail = if let Some((name, path)) = logs.get(selected) {
+                let text = self.artifact_text(path, 5000);
+                let path = path.clone();
+                let mut header = h_flex().p_4().gap_3().items_center()
+                    .child(div().flex_1().min_w_0().child(name.clone()));
+                if text.is_some() {
+                    let full = path.clone();
+                    header = header.child(band_button("artifact-log-copy", Lucide::Copy, "Копировать", p.raised, p.ink)
+                        .on_click(move |_, _, cx| {
+                            if let Some(all) = read_artifact(&full) {
+                                cx.write_to_clipboard(ClipboardItem::new_string(all));
+                            }
+                        }));
+                }
+                let header = header.child(band_button("artifact-log-open", Lucide::FileText, "Открыть файл", p.raised, p.ink)
+                    .on_click(move |_, _, _| open_path(&path)));
+                v_flex().flex_1().min_w_0().h_full()
+                    .child(header)
+                    .child(div().id("artifact-log-content").flex_1().min_h_0().overflow_scroll().p_4().font_family(MONO).font_features(tnum()).text_sm().whitespace_nowrap()
+                        .child(text.unwrap_or_else(|| "Лог пуст или не читается.".into())))
+                    .into_any_element()
+            } else {
+                div().flex_1().p_6().text_color(p.muted).child("Нет доступных сохранённых логов прогонов.").into_any_element()
+            };
+            return v_flex().size_full().child(tabs).child(h_flex().flex_1().min_h_0().child(list).child(detail)).into_any_element();
+        }
+        let runs_dir = PathBuf::from(self.runs_dir.read(cx).value().trim());
+        let runs_dir = if runs_dir.is_absolute() { runs_dir } else { self.root.join(runs_dir) };
+        let docs = artifact_documents(&self.root, &runs_dir);
+        let selected = artifact_selected(&docs, self.artifact_doc.as_deref());
+        let document = docs.get(selected);
+        let document_text = document.and_then(|d| self.artifact_text(&d.path, usize::MAX));
+        let document_item = |i: usize, label: String| {
+            let path = docs[i].path.clone();
+            let icon = if path.file_name().is_some_and(|name| name == "data_summary.md") { Lucide::Database } else { Lucide::FileText };
+            h_flex()
+                .id(("artifact-document", i))
+                .px_3().py_2().rounded_md().cursor_pointer()
+                .when(i == selected, |d| d.bg(p.raised).font_weight(FontWeight::SEMIBOLD))
+                .gap_2().items_center()
+                .child(Icon::new(icon).size_4().text_color(p.muted))
+                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(label))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.artifact_doc = Some(path.clone());
+                    cx.notify();
+                }))
+        };
+        let selector = sidebar("artifact-document-list")
+            .child(document_item(0, "Сводный отчёт".into()))
+            .children(artifact_groups(&docs).into_iter().map(|(name, indices)| {
+                v_flex().pt_3().gap_1()
+                    .child(div().px_3().text_xs().text_color(p.muted).overflow_hidden().whitespace_nowrap().text_ellipsis().child(name))
+                    .children(indices.into_iter().map(|i| {
+                        let label = if docs[i].path.file_name().is_some_and(|n| n == "report.md") { "Отчёт" } else { "Данные" };
+                        document_item(i, label.into())
+                    }))
+            }));
+        let content = match document_text.as_ref().map(|t| t.as_ref()) {
+            Some(text) => v_flex()
+                .gap_2()
+                .font_features(tnum())
+                .children(artifact_markdown::parse_markdown(text).into_iter().map(|block| {
+                    use artifact_markdown::Block;
+                    match block {
+                        Block::Heading { level, text } => div().pt_2().font_weight(FontWeight::SEMIBOLD).text_size(px(match level { 1 => 24., 2 => 20., 3 => 17., _ => 15. })).child(text),
+                        Block::Paragraph(text) => div().child(text),
+                        Block::List { ordered, start, items } => v_flex().gap_1().children(items.into_iter().enumerate().map(|(i, item)| {
+                            let pad = item.chars().take_while(|c| *c == '\u{a0}').count();
+                            div().pl(px(pad as f32 * 6.)).child(format!("{} {}", if ordered { format!("{}.", start + i) } else { "•".into() }, item.trim_start_matches('\u{a0}')))
+                        })),
+                        Block::Table { headers, rows } => {
+                            let row = |cells: Vec<String>| h_flex().border_b_1().border_color(p.rule).children(cells.into_iter().map(|cell| div().flex_1().min_w(px(100.)).p_2().child(cell)));
+                            v_flex().border_1().border_color(p.rule).child(row(headers).font_weight(FontWeight::SEMIBOLD)).children(rows.into_iter().map(row))
+                        }
+                        Block::Code { language: _, text } => div().p_3().bg(p.raised).font_family(MONO).text_sm().child(text),
+                    }
+                }))
+                .into_any_element(),
+            None => v_flex()
+                .gap_2()
+                .child(display("Документ недоступен", 24., p.ink))
+                .child(div().text_color(p.muted).child(document.map_or("Файл не найден".into(), |d| format!("Файл пуст или не читается: {}", d.path.display()))))
+                .into_any_element(),
+        };
+        v_flex()
+            .size_full()
+            .child(tabs)
+            .child(h_flex().flex_1().min_h_0().pt_4()
+                .child(selector)
+                .child(v_flex().flex_1().min_w_0().h_full()
+                    .when_some(document, |d, doc| d
+                        .child(div().px_8().pt_2().font_weight(FontWeight::SEMIBOLD).child(doc.title.clone()))
+                        .child(div().px_8().pt_1().text_xs().text_color(p.muted).child(show_path(&doc.path))))
+                    .child(div().id("artifact-content").flex_1().min_h_0().overflow_y_scrollbar().px_8().py_4().child(content))))
+            .into_any_element()
+    }
+
     fn render_testing(&mut self, p: Pal, cx: &mut Context<Self>) -> AnyElement {
         let models = self.test_models();
         let (sel, dataset) = self.test_pick(&models);
@@ -5390,6 +5716,9 @@ impl Studio {
             .iter()
             .any(|j| j.running() && j.predict.as_ref().is_some_and(|pj| pj.scene == pv.scene));
         let models_row = h_flex()
+            .id("pv-models")
+            .max_h(px(100.))
+            .overflow_y_scrollbar()
             .px_4()
             .py_2()
             .gap_2()
@@ -5405,8 +5734,8 @@ impl Studio {
                         .child("нет прогонов с сохранённым best.pt"),
                 )
             })
-            .children(models.into_iter().take(6).enumerate().map(|(k, m)| {
-                let label = format!("{} · trial {}", m.run, m.trial);
+            .children(models.into_iter().enumerate().map(|(k, m)| {
+                let label = m.label();
                 let text = format!(
                     "{label} · F1 {}",
                     m.f1.map_or("—".into(), |f| format!("{f:.3}"))
@@ -5447,6 +5776,16 @@ impl Studio {
                 .into_any_element(),
             (Some(Ok(_)), None) => div().flex_1().into_any_element(),
             (Some(Ok(_)), Some(image)) => div()
+                .on_children_prepainted({
+                    let shown = pv.shown.clone();
+                    move |b, _, _| {
+                        if let Some(r) = b.first() {
+                            // ObjectFit::Contain: кадр вписан в элемент с сохранением пропорций.
+                            let k = (f32::from(r.size.width) / PREVIEW_W as f32).min(f32::from(r.size.height) / PREVIEW_H as f32);
+                            shown.set((PREVIEW_W as f32 * k, PREVIEW_H as f32 * k));
+                        }
+                    }
+                })
                 .id("pv-canvas")
                 .flex_1()
                 .min_h_0()
@@ -5462,7 +5801,7 @@ impl Studio {
                     let Some(p) = this.preview.as_mut() else {
                         return;
                     };
-                    if e.pressed_button != Some(MouseButton::Left) {
+                    if !matches!(e.pressed_button, Some(MouseButton::Left) | Some(MouseButton::Middle)) {
                         if p.last.take().is_some() {
                             p.dirty = true; // конец перетаскивания — полное качество
                             cx.notify();
@@ -5471,8 +5810,14 @@ impl Studio {
                     }
                     if let Some(last) = p.last {
                         let d = e.position - last;
-                        p.view.yaw -= f32::from(d.x) * 0.01;
-                        p.view.pitch = (p.view.pitch + f32::from(d.y) * 0.01).clamp(0., 1.55);
+                        if e.pressed_button == Some(MouseButton::Middle) {
+                            let (sw, sh) = p.shown.get();
+                            p.view.pan_x += f32::from(d.x) / sw.max(1.);
+                            p.view.pan_y += f32::from(d.y) / sh.max(1.);
+                        } else {
+                            p.view.yaw -= f32::from(d.x) * 0.01;
+                            p.view.pitch = (p.view.pitch + f32::from(d.y) * 0.01).clamp(0., 1.55);
+                        }
                     }
                     p.last = Some(e.position);
                     p.dirty = true;
@@ -5480,6 +5825,16 @@ impl Studio {
                 }))
                 .on_mouse_up(
                     MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(p) = this.preview.as_mut().filter(|p| p.last.is_some()) {
+                            p.last = None;
+                            p.dirty = true;
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Middle,
                     cx.listener(|this, _, _, cx| {
                         if let Some(p) = this.preview.as_mut().filter(|p| p.last.is_some()) {
                             p.last = None;
@@ -5569,7 +5924,7 @@ impl Studio {
                             .child(format!("{} {k} · {:.0}%", if t.is_empty() { "класс" } else { class_ru(t) }, n as f64 * 100. / shown as f64))
                     })))
                     .child(div().text_color(p.muted).font_features(tnum()).whitespace_nowrap().overflow_hidden().text_ellipsis().child(format!(
-                        "{} из {} точек · {:.0}×{:.0}×{:.0} м · тяните — вращать, колесо — масштаб",
+                        "{} из {} точек · {:.0}×{:.0}×{:.0} м · левая кнопка — вращать, средняя — двигать, колесо — масштаб",
                         thousands(c.pts.len() as u64),
                         thousands(c.total as u64),
                         c.extent[0],
@@ -6514,12 +6869,13 @@ impl Studio {
 
     // ---------- монитор ресурсов ----------
 
-    fn render_usage(&self, p: Pal) -> Div {
+    fn render_usage(&mut self, p: Pal, cx: &mut Context<Self>) -> Div {
         let u = &self.usage;
         let gb = |b: f64| format!("{:.1}", b / 1024f64.powi(3));
         let meter = |label: String, frac: f64, value: String| {
             let frac = frac.clamp(0., 1.);
             v_flex()
+                .px_5()
                 .gap_1()
                 .child(
                     h_flex()
@@ -6553,55 +6909,84 @@ impl Studio {
                         )),
                 )
         };
+        let collapsed = self.resources.collapsed();
         let mut block = v_flex()
-            .px_5()
             .pb_2()
-            .gap_2p5()
+            .gap_2()
             .text_color(p.rail_ink)
-            .child(div().text_xs().opacity(0.7).child("РЕСУРСЫ"))
-            .child(meter(
-                "ЦП".into(),
-                u.cpu as f64 / 100.,
-                format!("{:.0} %", u.cpu),
-            ))
-            .child(meter(
-                "ОЗУ".into(),
-                if u.ram_total > 0 {
-                    u.ram_used as f64 / u.ram_total as f64
-                } else {
-                    0.
-                },
-                format!("{} / {} ГБ", gb(u.ram_used as f64), gb(u.ram_total as f64)),
-            ));
-        for g in &u.gpus {
-            let temp = g.temp.map_or(String::new(), |t| format!(" · {t:.0} °C"));
+            .child(
+                h_flex()
+                    .id("resources-toggle")
+                    .h(px(28.))
+                    .w_full()
+                    .px_5()
+                    .items_center()
+                    .justify_between()
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.raised))
+                    .child(
+                        div()
+                            .font_family(BODY)
+                            .font_weight(FontWeight::NORMAL)
+                            .text_size(px(12.))
+                            .child("РЕСУРСЫ"),
+                    )
+                    .child(
+                        Icon::new(if collapsed {
+                            Lucide::ChevronRight
+                        } else {
+                            Lucide::ChevronDown
+                        })
+                        .size_4()
+                        .text_color(p.rail_ink)
+                        .opacity(0.7),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.resources.toggle();
+                        cx.notify();
+                    })),
+            );
+        if !collapsed {
             block = block
                 .child(meter(
-                    g.name.clone(),
-                    g.util as f64 / 100.,
-                    format!("{:.0} %{temp}", g.util),
+                    "ЦП".into(),
+                    u.cpu as f64 / 100.,
+                    format!("{:.0} %", u.cpu),
                 ))
                 .child(meter(
-                    (if g.shared {
-                        "Общая память ГП"
-                    } else {
-                        "Видеопамять"
-                    })
-                    .into(),
-                    if g.mem_total_mb > 0. {
-                        g.mem_used_mb / g.mem_total_mb
+                    "ОЗУ".into(),
+                    if u.ram_total > 0 {
+                        u.ram_used as f64 / u.ram_total as f64
                     } else {
                         0.
                     },
-                    format!(
-                        "{} / {} ГБ",
-                        gb(g.mem_used_mb * 1024. * 1024.),
-                        gb(g.mem_total_mb * 1024. * 1024.)
-                    ),
+                    format!("{} / {} ГБ", gb(u.ram_used as f64), gb(u.ram_total as f64)),
                 ));
-        }
-        if u.seq > 0 && u.gpus.is_empty() {
-            block = block.child(div().text_xs().opacity(0.6).child("ГП: нет данных"));
+            for g in &u.gpus {
+                let temp = g.temp.map_or(String::new(), |t| format!(" · {t:.0} °C"));
+                block = block
+                    .child(meter(
+                        g.name.clone(),
+                        g.util as f64 / 100.,
+                        format!("{:.0} %{temp}", g.util),
+                    ))
+                    .child(meter(
+                        (if g.shared { "Общая память ГП" } else { "Видеопамять" }).into(),
+                        if g.mem_total_mb > 0. {
+                            g.mem_used_mb / g.mem_total_mb
+                        } else {
+                            0.
+                        },
+                        format!(
+                            "{} / {} ГБ",
+                            gb(g.mem_used_mb * 1024. * 1024.),
+                            gb(g.mem_total_mb * 1024. * 1024.)
+                        ),
+                    ));
+            }
+            if u.seq > 0 && u.gpus.is_empty() {
+                block = block.child(div().px_5().text_xs().opacity(0.6).child("ГП: нет данных"));
+            }
         }
         block
     }
@@ -7179,7 +7564,7 @@ impl Render for Studio {
                 }))
         };
         let jobs =
-            v_flex().children(self.jobs.iter().enumerate().rev().map(|(i, j)| {
+            v_flex().id("rail-jobs").flex_1().min_h_0().overflow_y_scroll().children(self.jobs.iter().enumerate().rev().map(|(i, j)| {
                 let (label, bg, _) = j.status(&p);
                 h_flex()
                     .id(("job", i))
@@ -7273,6 +7658,12 @@ impl Render for Studio {
                 cx,
             ))
             .child(nav(
+                Tab::Artifacts,
+                Lucide::FileText,
+                "Артефакты".into(),
+                cx,
+            ))
+            .child(nav(
                 Tab::Env,
                 Lucide::Settings2,
                 if self.env_ready() {
@@ -7295,8 +7686,8 @@ impl Render for Studio {
                 )
                 .child(jobs)
             })
-            .child(div().flex_1())
-            .child(self.render_usage(p))
+            .when(self.jobs.is_empty(), |d| d.child(div().flex_1()))
+            .child(self.render_usage(p, cx))
             .child(
                 h_flex()
                     .px_4()
@@ -7340,6 +7731,7 @@ impl Render for Studio {
             Tab::Launch => self.render_launch(p, cx),
             Tab::Datasets => self.render_datasets(p, cx),
             Tab::Testing => self.render_testing(p, cx),
+            Tab::Artifacts => self.render_artifacts(p, cx),
             Tab::Env => self.render_env(p, cx),
             Tab::Projects => self.render_projects(p, cx),
             Tab::Scenarios => self.render_scenarios(p, cx),
@@ -7406,11 +7798,19 @@ fn small_caps(text: &str, color: Hsla) -> Div {
 }
 
 fn stat_line(label: &str, value: String, color: Hsla, p: Pal) -> Div {
+    stat_line_with_label_width(label, value, color, p, 120.)
+}
+
+fn compact_stat_line(label: &str, value: String, color: Hsla, p: Pal) -> Div {
+    stat_line_with_label_width(label, value, color, p, 48.)
+}
+
+fn stat_line_with_label_width(label: &str, value: String, color: Hsla, p: Pal, width: f32) -> Div {
     h_flex()
         .gap_3()
         .child(
             div()
-                .w(px(120.))
+                .w(px(width))
                 .flex_shrink_0()
                 .text_xs()
                 .text_color(p.muted)
@@ -7728,6 +8128,31 @@ fn chart_title(text: &str, line: Option<f64>, p: Pal) -> Div {
                     .child(format!("пунктир — линия вылета {l:.3}")),
             )
         })
+}
+
+/// Имя кэша предсказания: сцена + чекпойнт (путь, размер, время изменения), FNV-1a — стабилен между версиями Rust.
+/// Имя `preview_v4_<сцена>_<модель>.npy`: префикс до последнего `_` общий для всех версий модели на сцене.
+fn prediction_cache_name(scene: &Path, checkpoint: &Path) -> String {
+    let (len, mtime) = std::fs::metadata(checkpoint).map_or((0, 0), |m| {
+        let secs = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+        (m.len(), secs)
+    });
+    let fnv = |s: String| s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    let scene_hash = fnv(scene.display().to_string());
+    let model_hash = fnv(format!("{}\0{len}\0{mtime}", checkpoint.display()));
+    format!("preview_v4_{scene_hash:016x}_{model_hash:016x}.npy")
+}
+
+/// Удалить предсказания той же сцены от прежних версий чекпойнта (имя другое, префикс тот же).
+fn remove_stale_predictions(dir: &Path, keep: &str) {
+    let Some(i) = keep.rfind('_') else { return };
+    let prefix = &keep[..=i];
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != keep && name.starts_with(prefix) && name.ends_with(".npy") {
+            _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Имя прогона по умолчанию: <класс>_<признаки>, у Focal Loss — с суффиксом _focal (свой study).
@@ -8087,6 +8512,13 @@ fn notify_end(job: &Job, out: &Output) {
     });
 }
 
+fn initial_window_bounds(visible: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::centered_at(
+        visible.center(),
+        size(px(1440.), px(900.)).min(&size(visible.size.width * 0.9, visible.size.height * 0.9)),
+    )
+}
+
 fn main() {
     let root = find_root();
     // AllAssets: полный каталог Lucide (+~1 МБ), чтобы не перечислять иконки вручную.
@@ -8102,7 +8534,9 @@ fn main() {
                 ])
                 .expect("шрифт PT Sans Narrow");
             cx.on_window_closed(|cx, _| cx.quit()).detach();
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let bounds = cx.primary_display()
+                .map(|display| initial_window_bounds(display.visible_bounds()))
+                .unwrap_or_else(|| Bounds::centered(None, size(px(1024.), px(768.)), cx));
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -8122,6 +8556,39 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn artifact_views_start_with_documents_and_have_distinct_labels() {
+        use super::ArtifactView;
+        assert_eq!(ArtifactView::default(), ArtifactView::Documents);
+        let labels: Vec<_> = ArtifactView::ALL.iter().map(|view| view.label()).collect();
+        assert_eq!(labels, ["Документы", "Модели", "Логи"]);
+    }
+
+    #[test]
+    fn resources_start_expanded_and_toggle() {
+        let mut state = super::ResourcesVisibility::default();
+        assert!(!state.collapsed());
+        state.toggle();
+        assert!(state.collapsed());
+        state.toggle();
+        assert!(!state.collapsed());
+    }
+
+    #[test]
+    fn initial_window_fits_visible_display() {
+        use super::*;
+        for visible in [
+            Bounds::new(point(px(0.), px(0.)), size(px(1280.), px(720.))),
+            Bounds::new(point(px(100.), px(40.)), size(px(1920.), px(1040.))),
+        ] {
+            let window = initial_window_bounds(visible);
+            assert!(window.origin.x > visible.origin.x);
+            assert!(window.origin.y > visible.origin.y);
+            assert!(window.origin.x + window.size.width < visible.origin.x + visible.size.width);
+            assert!(window.origin.y + window.size.height < visible.origin.y + visible.size.height);
+        }
+    }
 
     /// Лог процесса растёт часами: в памяти держится только хвост, на диск пишется всё.
     #[test]
@@ -8150,6 +8617,16 @@ mod tests {
             a,
             ["x", "--output-dir", "runs/b", "--fixed-params", "p.json"]
         );
+    }
+
+    #[test]
+    fn prediction_cache_separates_scenes_and_models() {
+        use super::prediction_cache_name;
+        let scene = Path::new("data/a/scene.npy");
+        let model = Path::new("models/a.pt");
+        assert_eq!(prediction_cache_name(scene, model), prediction_cache_name(scene, model));
+        assert_ne!(prediction_cache_name(scene, model), prediction_cache_name(Path::new("data/b/scene.npy"), model));
+        assert_ne!(prediction_cache_name(scene, model), prediction_cache_name(scene, Path::new("other/a.pt")));
     }
 
     #[test]

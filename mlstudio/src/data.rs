@@ -335,6 +335,101 @@ pub fn imported_models(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+
+/// Путь последнего сохранённого лога прогона из `mlstudio-logs` (без чтения файла).
+///
+/// Имя прогона сравнивается с частью до `__` без интерпретации пути;
+/// выбирается лексикографически последний обычный файл.
+pub fn artifact_log_path(root: &Path, run_name: &str) -> Option<PathBuf> {
+    if run_name.is_empty() || run_name == "." || run_name == ".." || run_name.contains(['/', '\\']) {
+        return None;
+    }
+    let mut logs: Vec<PathBuf> = fs::read_dir(root.join("mlstudio-logs"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.strip_suffix(".log")
+                        .and_then(|name| name.split_once("__"))
+                        .is_some_and(|(title, _)| title == run_name)
+                })
+        })
+        .collect();
+    logs.sort();
+    logs.pop()
+}
+
+/// Markdown-артефакт, найденный в каталоге проекта.
+#[derive(Clone)]
+pub struct ArtifactDocument {
+    pub title: String,
+    pub path: PathBuf,
+}
+
+/// Все отчёты и сводки, доступные без запуска внешнего редактора.
+pub fn artifact_documents(_root: &Path, runs_dir: &Path) -> Vec<ArtifactDocument> {
+    let mut out = vec![ArtifactDocument {
+        title: "Сводный отчёт".into(),
+        path: runs_dir.join("report.md"),
+    }];
+    for dir in dirs(runs_dir) {
+        for (name, title) in [("report.md", "Отчёт"), ("data_summary.md", "Данные")] {
+            let path = dir.join(name);
+            if path.exists() {
+                out.push(ArtifactDocument {
+                    title: format!("{title} · {}", file_name(&dir)),
+                    path,
+                });
+            }
+        }
+    }
+    out
+}
+
+pub fn artifact_selected(docs: &[ArtifactDocument], path: Option<&Path>) -> usize {
+    path.and_then(|path| docs.iter().position(|doc| doc.path == path)).unwrap_or(0)
+}
+
+pub fn artifact_groups(docs: &[ArtifactDocument]) -> Vec<(String, Vec<usize>)> {
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, doc) in docs.iter().enumerate().skip(1) {
+        let name = doc.path.parent().map(file_name).unwrap_or_default();
+        if let Some((_, indices)) = groups.iter_mut().find(|(group, _)| *group == name) {
+            indices.push(i);
+        } else {
+            groups.push((name, vec![i]));
+        }
+    }
+    groups
+}
+
+/// Объединённый список моделей: checkpoint прогона, trial fallback и импортированные файлы.
+pub fn artifact_models(root: &Path, runs: &[Run]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for run in runs {
+        let primary = run.path.join("best_model.pt");
+        let fallback = run.best.as_ref().and_then(|v| v.get("best_trial")).and_then(|v| v.as_u64())
+            .map(|best| run.path.join(format!("trial_{best:04}")).join("best.pt"));
+        if primary.is_file() {
+            out.push(primary);
+        } else if let Some(path) = fallback.filter(|p| p.is_file()) {
+            out.push(path);
+        }
+    }
+    out.extend(imported_models(root));
+    out.sort();
+    out.dedup();
+    out
+}
+
+pub fn read_artifact(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().filter(|text| !text.trim().is_empty())
+}
+
 /// Копия .pt в models/; если имя занято — с суффиксом _2, _3…
 pub fn import_model(root: &Path, src: &Path) -> Result<PathBuf, String> {
     if src.extension().is_none_or(|e| e != "pt") {
@@ -885,6 +980,88 @@ mod tests {
         assert!(super::pooled(&serde_json::json!({"scenes": []})).is_none());
         assert_eq!(super::spread(10, 3), [0, 3, 6]);
         assert_eq!(super::spread(2, 5), [0, 1]);
+    }
+
+    #[test]
+    fn artifact_log_returns_latest_exact_run_log() {
+        let root = std::env::temp_dir().join(format!("mlstudio-artifact-log-{}", std::process::id()));
+        let logs = root.join("mlstudio-logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("ground_xyz__2026-01-01.log"), "old").unwrap();
+        fs::write(logs.join("ground_xyz__2026-01-02.log"), "latest").unwrap();
+        fs::write(logs.join("ground_xyz_extra__2026-01-03.log"), "other").unwrap();
+
+        let path = artifact_log_path(&root, "ground_xyz").unwrap();
+        assert_eq!(path, logs.join("ground_xyz__2026-01-02.log"));
+        assert!(artifact_log_path(&root, "missing").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_selection_tracks_path_when_order_changes() {
+        let docs = vec![
+            ArtifactDocument { title: "Сводный отчёт".into(), path: "runs/report.md".into() },
+            ArtifactDocument { title: "Данные".into(), path: "runs/b/data_summary.md".into() },
+            ArtifactDocument { title: "Отчёт".into(), path: "runs/a/report.md".into() },
+        ];
+        assert_eq!(artifact_selected(&docs, Some(Path::new("runs/a/report.md"))), 2);
+        assert_eq!(artifact_selected(&docs, Some(Path::new("missing"))), 0);
+        assert_eq!(artifact_selected(&docs, None), 0);
+    }
+
+    #[test]
+    fn artifact_sidebar_groups_documents_by_run() {
+        let docs = vec![
+            ArtifactDocument { title: "Сводный отчёт".into(), path: "runs/report.md".into() },
+            ArtifactDocument { title: "Отчёт · a".into(), path: "runs/a/report.md".into() },
+            ArtifactDocument { title: "Данные · a".into(), path: "runs/a/data_summary.md".into() },
+            ArtifactDocument { title: "Данные · b".into(), path: "runs/b/data_summary.md".into() },
+        ];
+        assert_eq!(artifact_groups(&docs), vec![("a".to_string(), vec![1, 2]), ("b".to_string(), vec![3])]);
+        assert!(artifact_groups(&docs[..1]).is_empty());
+    }
+
+    #[test]
+    fn artifact_documents_include_summary_and_run_files() {
+        let root = std::env::temp_dir().join(format!("mlstudio-artifacts-{}", std::process::id()));
+        let runs = root.join("runs");
+        fs::create_dir_all(runs.join("a")).unwrap();
+        fs::write(runs.join("report.md"), "# общий").unwrap();
+        fs::write(runs.join("a").join("report.md"), "# run").unwrap();
+        fs::write(runs.join("a").join("data_summary.md"), "# data").unwrap();
+        let docs = artifact_documents(&root, &runs);
+        assert_eq!(docs.len(), 3);
+                assert_eq!(docs[2].title, "Данные · a");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_models_deduplicate_run_and_imported_checkpoints() {
+        let root = std::env::temp_dir().join(format!("mlstudio-models-{}", std::process::id()));
+        let run = root.join("runs").join("r");
+        fs::create_dir_all(run.join("trial_0001")).unwrap();
+        fs::create_dir_all(root.join("models")).unwrap();
+        fs::write(run.join("best_model.pt"), "best").unwrap();
+        fs::write(run.join("trial_0001").join("best.pt"), "trial").unwrap();
+        fs::write(root.join("models").join("import.pt"), "import").unwrap();
+        let r = Run { name: "r".into(), path: run.clone(), best: Some(serde_json::json!({"best_trial": 1})), split: None, studio: None, scene_eval: None, trials: vec![] };
+        let models = artifact_models(&root, &[r]);
+        assert_eq!(models.len(), 2);
+        assert!(models.contains(&run.join("best_model.pt")));
+        assert!(!models.contains(&run.join("trial_0001").join("best.pt")));
+        assert!(models.iter().any(|p| p.ends_with("import.pt")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_artifact_rejects_missing_and_blank_files() {
+        let root = std::env::temp_dir().join(format!("mlstudio-read-artifact-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let blank = root.join("blank.md");
+        fs::write(&blank, " \n").unwrap();
+        assert_eq!(read_artifact(&root.join("missing.md")), None);
+        assert_eq!(read_artifact(&blank), None);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

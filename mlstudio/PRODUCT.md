@@ -40,7 +40,9 @@ The app is built around this project's actual artifacts: `scene_*.npy` datasets,
 - Prediction jobs (`predict_scene.py`: model testing and per-scene evaluation) get their own live screen: F1 of the last scene, scene and patch progress, and a table of scenes — not the trials-and-epochs match view, which would stay empty forever.
 - If the app is closed, it kills its running training processes rather than leaving them orphaned.
 - The UI language is Russian, matching the project docs and log output.
-- Undecided: a job queue, comparing runs side by side, and reading `report.md` inside the app.
+- «Артефакты» показывают только файлы на диске, без повторов других экранов: «Документы» — read-only просмотр `runs/report.md`, отчётов прогонов и `runs/<run>/data_summary.md`; «Модели» — все `.pt` (`best_model.pt` или `best.pt` лучшего trial каждого прогона и импортированные `models/*.pt`) с классом, признаками, F1 из `best.json`, размером и кнопками «Тестировать» и «Открыть папку»; «Логи» — последний сохранённый лог каждого прогона с копированием и открытием файла.
+- Сравнение прогонов и F1 по эпохам живут в «Прогонах», 3D-превью сцен — в «Датасетах» и «Тестировании»; в «Артефактах» их нет. Отложены: актуальность `runs/report.md` с пересборкой, список файлов прогона, diff снимка скрипта.
+- Undecided: a job queue.
 
 ## Evidence on Hand
 

@@ -150,11 +150,13 @@ pub struct View {
     pub yaw: f32,
     pub pitch: f32,
     pub zoom: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
 }
 
 impl Default for View {
     fn default() -> Self {
-        Self { yaw: -0.6, pitch: 0.9, zoom: 1.35 }
+        Self { yaw: -0.6, pitch: 0.9, zoom: 1.35, pan_x: 0., pan_y: 0. }
     }
 }
 
@@ -195,7 +197,7 @@ pub fn render(c: &Cloud, v: &View, w: u32, h: u32, stride: usize, by: ColorBy, o
         let x = p[0] * cy - p[1] * sy;
         let y = p[0] * sy + p[1] * cy;
         let (y2, d) = (y * cp - p[2] * sp, y * sp + p[2] * cp);
-        let (sx, sy_) = (w as f32 / 2. + x * s, h as f32 / 2. + y2 * s);
+        let (sx, sy_) = (w as f32 / 2. + v.pan_x * w as f32 + x * s, h as f32 / 2. + v.pan_y * h as f32 + y2 * s);
         if sx < 0. || sy_ < 0. {
             continue;
         }
@@ -263,6 +265,9 @@ mod tests {
         assert_eq!(img.len(), 64 * 48 * 4);
         // что-то нарисовано красным (BGRA: R в байте 2)
         assert!(img.chunks_exact(4).any(|p| p[2] == 255 && p[0] == 0));
+        // сдвиг вида смещает кадр
+        let panned = render(&c, &View { pan_x: 0.1, ..View::default() }, 64, 48, 1, ColorBy::Class, None, 0x000000, |_| 0xFF0000);
+        assert_ne!(img, panned);
     }
 
     #[test]

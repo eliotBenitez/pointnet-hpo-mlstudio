@@ -83,21 +83,28 @@ def scene_metrics(pred, arr, target):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--checkpoint", type=Path, required=True, help="best.pt trial-а")
-    ap.add_argument("--scene", type=Path, nargs="+", required=True)
+    ap.add_argument("--scene", type=Path, nargs="+")
     ap.add_argument("--out", type=Path, help="одна сцена: файл предсказания .npy")
     ap.add_argument("--out-dir", type=Path, help="много сцен: <out-dir>/<сцена>__<tag>.npy и scenes__<tag>.json с метриками")
     ap.add_argument("--tag", default="pred", help="суффикс файлов в --out-dir, например trial12")
+    ap.add_argument("--print-target", action="store_true", help="только напечатать целевой класс модели и выйти")
     args = ap.parse_args()
-    if (args.out is None) == (args.out_dir is None):
-        ap.error("нужен ровно один из --out (одна сцена) и --out-dir (много сцен)")
-    if args.out is not None and len(args.scene) != 1:
-        ap.error("--out — для одной сцены; для нескольких используйте --out-dir")
+    if not args.print_target:
+        if not args.scene:
+            ap.error("нужен --scene")
+        if (args.out is None) == (args.out_dir is None):
+            ap.error("нужен ровно один из --out (одна сцена) и --out-dir (много сцен)")
+        if args.out is not None and len(args.scene) != 1:
+            ap.error("--out — для одной сцены; для нескольких используйте --out-dir")
 
     import torch
     # weights_only — без исполнения кода; run_info хранит torch.__version__ (TorchVersion), его разрешаем явно.
     with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
         ck = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     params, info = ck["params"], ck["run_info"]
+    if args.print_target:
+        print(info["target"])
+        return
     features = info.get("features", "xyz")
     n_points = int(info.get("patch_points", 16384))
     seed = int(info.get("seed", 42))

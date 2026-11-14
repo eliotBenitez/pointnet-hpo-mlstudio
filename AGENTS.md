@@ -2,6 +2,14 @@
 
 PointNet++ hyperparameter search over LiDAR scenes (Python) plus **ML Studio**, a native GPUI desktop app that drives the same scripts. Docs, UI, logs and report text are Russian — keep it that way.
 
+## Model roles
+
+- **Opus 5.5**: plan complex work, assess architectural decisions, and independently review changes and risks.
+- **Sonnet 5.5 / DeepSeek V4.1 Flash 1017**: implement changes, write and run tests, and troubleshoot implementation issues.
+- **Haiku 5.5**: search for information, explore files, and handle other small, well-defined tasks.
+
+These are preferred roles, not a requirement to involve multiple models in every task. Use delegation when available and worthwhile; if the preferred model or delegation is unavailable, the current agent should continue and report the limitation. Review and verification remain required regardless of the model used. The human retains responsibility for final decisions.
+
 ## Entrypoints
 
 | Path | Role |

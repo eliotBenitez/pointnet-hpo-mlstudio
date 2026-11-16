@@ -23,8 +23,10 @@ import numpy as np
 LOG = logging.getLogger("hpo_pointnet")
 MODEL_NAME = "pointnet2.s3dis-area1.openpoints"
 # Повышать при любом изменении диапазонов в run_trial или обучения, делающем trials несравнимыми
-# (5: кеш FPS со своим случайным стартом — другой поток RNG, чем у прежних trials).
-SEARCH_SPACE_VERSION = 5
+# (5: кеш FPS со своим случайным стартом — другой поток RNG, чем у прежних trials;
+#  6: аугментации Train и F1 при пороге, подобранном по Val;
+#  7: AdamW вместо Adam, weight_decay 1e-5..1e-1).
+SEARCH_SPACE_VERSION = 7
 FIELDS = ["number", "state", "f1", "precision", "recall", "baseline_f1", "seed", "target",
           "features", "checkpoint", "error", "params", "seconds"]
 EPOCH_FIELDS = ["epoch", "f1", "precision", "recall", "iou", "train_f1", "train_precision",
@@ -50,6 +52,8 @@ GROUND_CELL = 1.0  # м: при ~100 точках/м² в ячейке хват�
 ABOVE_GROUND_THRESHOLD = 0.5  # м
 BASELINE_MARGIN = 0.05  # ТЗ: модель должна обгонять «всё = 1» хотя бы на 5 п.п. F1
 N_POINTS_L0_MAX = 4096  # верх n_points_l0 = длина закешированного порядка FPS
+THRESHOLD_BINS = 100  # шаг подбора порога вероятности цели — 0.01
+AUG_SCALE = (0.9, 1.1)  # диапазон случайного масштаба патча в аугментации
 
 
 def generate_data_summary(data_dir):
@@ -200,10 +204,12 @@ class PatchDataset:
     радиус растёт, если много — случайное прореживание до n_points. Центр и прореживание
     зависят только от (seed, epoch, index); у val epoch не меняется, и патчи фиксированы.
     Координаты патча центрируются и делятся на радиус, поэтому radius_l0 задан в долях патча.
+    augment (только Train): поворот вокруг Z, отражение и масштаб от того же (seed, epoch, index);
+    расстояния меняются в одно число раз, поэтому порядок FPS (и FpsCache) остаётся корректным.
     """
 
     def __init__(self, paths, target_ids, n_points=16384, patches_per_scene=2, seed=42,
-                 features="xyz"):
+                 features="xyz", augment=False):
         if features not in FEATURE_CHANNELS:
             raise ValueError(f"features должен быть одним из {list(FEATURE_CHANNELS)}")
         self.paths = list(paths)
@@ -212,6 +218,7 @@ class PatchDataset:
         self.patches_per_scene = patches_per_scene
         self.seed = seed
         self.features = features
+        self.augment = augment
         self.epoch = 0
         # Сетки земли — один раз в основном процессе: воркеры DataLoader получают их готовыми.
         self._ground = [ground_grid(np.asarray(np.load(p, mmap_mode="r", allow_pickle=False)[:, XYZ],
@@ -239,9 +246,17 @@ class PatchDataset:
         xyz = np.asarray(arr[idx, XYZ], dtype=np.float32)
         shift = np.array([center[0], center[1], xyz[:, 2].min()], dtype=np.float32)
         feat = (xyz - shift) / r
+        scale = 1.0
+        if self.augment:
+            a = rng.uniform(0, 2 * math.pi)
+            rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]], dtype=np.float32)
+            if rng.random() < 0.5:
+                rot[:, 0] *= -1  # отражение по x; вместе с поворотом даёт любые отражения в XY
+            scale = rng.uniform(*AUG_SCALE)
+            feat = np.column_stack((feat[:, :2] @ rot.T, feat[:, 2])) * scale
         if self.features == "xyz_hag":
-            hag = hag_at(xyz, *self._ground[scene])
-            feat = np.column_stack((feat, hag / r, hag > ABOVE_GROUND_THRESHOLD))
+            hag = hag_at(xyz, *self._ground[scene])  # по исходным координатам, затем тот же масштаб
+            feat = np.column_stack((feat, hag / r * scale, hag > ABOVE_GROUND_THRESHOLD))
         y = np.isin(np.asarray(arr[idx, LABEL_COL]), self.target_ids).astype(np.int64)
         return torch.from_numpy(feat.astype(np.float32)), torch.from_numpy(y)  # колонки 0–2 — координаты
 
@@ -431,16 +446,35 @@ def counts_metrics(counts):
     return binary_metrics(tp, fp, fn, tn + fp)
 
 
-def evaluate(model, loader, device, cache=None):
+def threshold_metrics(hist):
+    """Метрики при пороге вероятности цели с лучшим F1 (при равенстве — ближе к 0.5).
+
+    hist — [2 * THRESHOLD_BINS]: гистограмма p(цель) у точек фона, затем у точек цели;
+    точка считается целью при p >= k / THRESHOLD_BINS. f1_default — F1 при пороге 0.5.
+    """
+    neg, pos = np.asarray(hist, dtype=np.int64).reshape(2, THRESHOLD_BINS)
+    tp, fp = np.cumsum(pos[::-1])[::-1], np.cumsum(neg[::-1])[::-1]  # [k] — точки с бином >= k
+    n_pos, half = int(pos.sum()), THRESHOLD_BINS // 2
+    f1 = 2 * tp / np.maximum(1, tp + fp + n_pos)
+    k = min(range(1, THRESHOLD_BINS), key=lambda k: (-f1[k], abs(k - half)))
+    m = binary_metrics(int(tp[k]), int(fp[k]), n_pos - int(tp[k]), int(neg.sum()))
+    return dict(m, threshold=k / THRESHOLD_BINS, f1_default=float(f1[half]))
+
+
+def evaluate(model, loader, device, cache=None, amp=False):
     import torch
     model.eval()
-    counts = torch.zeros(4, dtype=torch.long, device=device)
+    hist = torch.zeros(2 * THRESHOLD_BINS, dtype=torch.long, device=device)
     with torch.no_grad():
         for feat, batch, y, keys in loader:
             feat, batch = feat.to(device), batch.to(device)
-            pred = forward(model, feat, batch, keys, cache).argmax(dim=1)
-            counts += confusion_counts(pred, y.to(device))
-    return counts_metrics(counts)
+            with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
+                out = forward(model, feat, batch, keys, cache)
+            p = torch.softmax(out.float(), dim=1)[:, 1]
+            b = (p * THRESHOLD_BINS).long().clamp_(max=THRESHOLD_BINS - 1)
+            hist += torch.bincount(y.to(device).long() * THRESHOLD_BINS + b,
+                                   minlength=2 * THRESHOLD_BINS)
+    return threshold_metrics(hist.cpu().numpy())
 
 
 def best_trial(study):
@@ -464,8 +498,10 @@ def generate_report(study, output_path, run_info, data_summary=None, importances
     else:
         best = complete[0]
         baseline = best.user_attrs.get("baseline_f1", float("nan"))
-        lines += [f"- Лучший F1 целевого класса: {best.value:.4f} (trial {best.number}); "
-                  f"baseline «всё = 1»: {baseline:.4f}.",
+        lines += [f"- Лучший F1 целевого класса: {best.value:.4f} (trial {best.number}; порог подобран "
+                  f"по Val, поэтому оценка оптимистична); baseline «всё = 1»: {baseline:.4f}.",
+                  f"- Порог вероятности цели (подобран по Val): {best.user_attrs.get('threshold', 0.5):.2f}; "
+                  f"F1 при пороге 0.5 без подбора: {best.user_attrs.get('f1_default', float('nan')):.4f}.",
                   f"- Лучшие гиперпараметры: `{json.dumps(best.params, ensure_ascii=False, sort_keys=True)}`.",
                   "", "## Топ-5 конфигураций", "",
                   "| Ранг | Trial | F1 | Precision | Recall | lr | weight_decay | dropout | batch_size (патчи) | n_sa_layers | n_points_l0 | radius_l0 | nsample | use_MSG |",
@@ -500,8 +536,9 @@ def generate_report(study, output_path, run_info, data_summary=None, importances
         except (ValueError, RuntimeError) as exc:
             lines.append(f"Недоступна: {exc}.")
         lines += ["", "## Предупреждения", ""]
-        if best.value - baseline < BASELINE_MARGIN:
-            lines.append(f"- F1 модели выше baseline «всё = 1» меньше чем на {BASELINE_MARGIN}: "
+        # Сравнение с baseline — по F1 без подбора порога (подбор по тому же Val завышает F1).
+        if best.user_attrs.get("f1_default", best.value) - baseline < BASELINE_MARGIN:
+            lines.append(f"- F1 при пороге 0.5 выше baseline «всё = 1» меньше чем на {BASELINE_MARGIN}: "
                          "проверьте, учится ли сеть.")
         if best.user_attrs.get("val_positive_points", 1) == 0:
             lines.append("- В Val-патчах нет точек целевого класса: метрики не информативны.")
@@ -541,12 +578,13 @@ def write_best(study, output_dir, run_info):
         prev = json.loads((out / "best.json").read_text(encoding="utf-8")).get("best_trial")
     except (OSError, ValueError):
         prev = None
-    result = dict(run_info, trials=len(study.trials), complete=len(complete))
+    result = dict(run_info, search_space=SEARCH_SPACE_VERSION, trials=len(study.trials),
+                  complete=len(complete))
     if best:
         result.update(best_trial=best.number, f1=best.value,
                       **{k: best.user_attrs.get(k) for k in
                          ("precision", "recall", "iou", "baseline_f1", "val_positive_points",
-                          "epoch", "train", "val")},
+                          "epoch", "train", "val", "threshold", "f1_default")},
                       params=best.params)
         # Итоговая модель прогона — копия best.pt лучшего trial (веса, params, run_info).
         ckpt = out / f"trial_{best.number:04d}" / "best.pt"
@@ -620,6 +658,8 @@ def main(argv=None):
     parser.add_argument("--loss", choices=["ce", "focal"], default="ce",
                         help="ce — взвешенная CrossEntropyLoss, focal — Focal Loss с теми же весами")
     parser.add_argument("--focal-gamma", type=float, default=2.0, help="gamma для --loss focal")
+    parser.add_argument("--amp", action="store_true",
+                        help="Смешанная точность fp16 на CUDA (быстрее, меньше памяти); на CPU не действует")
     parser.add_argument("--wandb-api-key", default=None, help="Не записывается в артефакты")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -655,13 +695,16 @@ def main(argv=None):
             if existing.user_attrs.get("search_space") != SEARCH_SPACE_VERSION:
                 raise SystemExit(f"{args.output_dir}: несовместимая версия study; укажите новую --output-dir")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    amp = args.amp and device.type == "cuda"
+    if args.amp and not amp:
+        LOG.warning("--amp: CUDA недоступна, обучение в fp32")
     target_ids = TARGETS[args.target]
     data_summary = generate_data_summary(args.data_dir)
     (args.output_dir / "data_summary.md").write_text(
         "# Сводка исходного датасета\n\n" + data_summary, encoding="utf-8")
     train_paths, val_paths = split_scenes(load_scenes(args.data_dir), args.seed)
     train = PatchDataset(train_paths, target_ids, args.patch_points,
-                         args.patches_per_scene, args.seed, args.features)
+                         args.patches_per_scene, args.seed, args.features, augment=True)
     val = PatchDataset(val_paths, target_ids, args.patch_points,
                        args.patches_per_scene, args.seed, args.features)
     # Длина порядка = верх n_points_l0, чтобы префикс покрывал любой trial. Хранить стоит только
@@ -679,6 +722,7 @@ def main(argv=None):
         "train_points": {"background": int(counts[0]), "target": int(counts[1])},
         "class_weights": [round(float(w), 4) for w in weights],
         "loss": "ce" if args.loss == "ce" else f"focal(gamma={args.focal_gamma:g})",
+        "optimizer": "AdamW", "amp": amp,
         "device": torch.cuda.get_device_name(0) if device.type == "cuda" else platform.processor(),
         "versions": {"python": platform.python_version(), "torch": torch.__version__,
                      "optuna": optuna.__version__},
@@ -712,7 +756,8 @@ def main(argv=None):
     def run_trial(trial):
         params = {
             "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
+            # AdamW: decoupled weight decay (шаг lr * wd), поэтому диапазон выше, чем у L2 в Adam.
+            "weight_decay": trial.suggest_float("weight_decay", 1e-5, 1e-1, log=True),
             "dropout": trial.suggest_float("dropout", 0.0, 0.5),
             "batch_size": trial.suggest_categorical("batch_size", [2, 3, 4]),  # патчей в батче
             "n_sa_layers": trial.suggest_int("n_sa_layers", 2, 4),
@@ -731,8 +776,9 @@ def main(argv=None):
             indent=2, ensure_ascii=False), encoding="utf-8")
         model = build_model(params, FEATURE_CHANNELS[args.features]).to(device)
         criterion = make_criterion(args.loss, weights, args.focal_gamma)
-        optimizer = torch.optim.Adam(model.parameters(), lr=params["lr"],
-                                     weight_decay=params["weight_decay"])
+        optimizer = torch.optim.AdamW(model.parameters(), lr=params["lr"],
+                                      weight_decay=params["weight_decay"])
+        scaler = torch.amp.GradScaler(device.type, enabled=amp)
         # ТЗ: переобучение замечено после 4-й эпохи — снижаем lr, когда F1 на Val не растёт.
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max",
                                                                factor=0.5, patience=1)
@@ -756,16 +802,19 @@ def main(argv=None):
                 for step, (feat, batch, y, keys) in enumerate(train_loader, 1):
                     feat, batch, y = feat.to(device), batch.to(device), y.to(device)
                     optimizer.zero_grad(set_to_none=True)
-                    out = forward(model, feat, batch, keys, train_cache)
+                    with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
+                        out = forward(model, feat, batch, keys, train_cache)
+                    out = out.float()  # loss в fp32: exp в focal и веса классов без потери точности
                     loss = criterion(out, y)
-                    loss.backward()
-                    optimizer.step()
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
                     train_counts += confusion_counts(out.detach().argmax(dim=1), y)
                     if step % 20 == 0 or step == n_batches:  # прогресс внутри долгой эпохи
                         LOG.info("trial=%s epoch=%s batch %s/%s loss=%.4f %.0fs", trial.number,
                                  epoch + 1, step, n_batches, loss.item(), time.time() - start)
                 train_m = counts_metrics(train_counts)
-                m = evaluate(model, val_loader, device, val_cache)
+                m = evaluate(model, val_loader, device, val_cache, amp)
                 seconds = round(time.time() - start, 1)  # обучение + валидация
                 f1 = m["f1"]
                 lr = optimizer.param_groups[0]["lr"]
@@ -782,15 +831,17 @@ def main(argv=None):
                     best, best_m = f1, dict(m, epoch=epoch + 1, train=train_m, val=m)
                     torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
                                 "params": params, "run_info": run_info, "epoch": epoch + 1,
-                                "f1": best}, ckpt_path)
+                                "f1": best, "threshold": m["threshold"]}, ckpt_path)
                 trial.report(f1, epoch)
                 LOG.info("trial=%s epoch=%s F1=%.4f best=%.4f baseline=%.4f lr=%.2g время=%s",
                          trial.number, epoch + 1, f1, best, m["baseline_f1"], lr,
                          timedelta(seconds=round(seconds)))
                 # Без «trial=»: mlstudio разбирает строки с «trial=… epoch=… F1=» как точки графика.
                 LOG.info("trial %s epoch %s | Train: IoU=%.4f F1=%.4f P=%.4f R=%.4f "
-                         "| Val: IoU=%.4f F1=%.4f P=%.4f R=%.4f", trial.number, epoch + 1,
-                         *(d[k] for d in (train_m, m) for k in ("iou", "f1", "precision", "recall")))
+                         "| Val: IoU=%.4f F1=%.4f P=%.4f R=%.4f порог=%.2f (F1 при 0.5: %.4f)",
+                         trial.number, epoch + 1,
+                         *(d[k] for d in (train_m, m) for k in ("iou", "f1", "precision", "recall")),
+                         m["threshold"], m["f1_default"])
                 LOG.info("trial %s epoch %s | матрица ошибок [[TN, FP], [FN, TP]]: Train=%s Val=%s",
                          trial.number, epoch + 1, train_m["confusion"], m["confusion"])
                 if trial.should_prune():
@@ -800,7 +851,7 @@ def main(argv=None):
         finally:
             if best_m:
                 for key in ("precision", "recall", "iou", "baseline_f1", "val_positive_points",
-                            "epoch", "train", "val"):
+                            "epoch", "train", "val", "threshold", "f1_default"):
                     trial.set_user_attr(key, best_m[key])
                 with (run_dir / "metrics.csv").open("w", newline="", encoding="utf-8") as f:
                     writer = csv.DictWriter(f, fieldnames=EPOCH_FIELDS)
@@ -852,8 +903,13 @@ def main(argv=None):
     if study.trials and study.user_attrs.get("loss", "ce") != run_info["loss"]:
         raise SystemExit(f"{args.output_dir}: study обучалась с loss={study.user_attrs.get('loss', 'ce')}, "
                          f"запрошено {run_info['loss']}; укажите другую --output-dir")
+    # fp16 и fp32 дают несравнимые trials; у study без атрибута amp был выключен.
+    if study.trials and study.user_attrs.get("amp", False) != run_info["amp"]:
+        raise SystemExit(f"{args.output_dir}: study обучалась с amp={study.user_attrs.get('amp', False)}, "
+                         f"запрошено {run_info['amp']}; укажите другую --output-dir")
     study.set_user_attr("search_space", SEARCH_SPACE_VERSION)
     study.set_user_attr("loss", run_info["loss"])
+    study.set_user_attr("amp", run_info["amp"])
     study.set_user_attr("compatibility", compatibility_info(run_info))
     if args.fixed_params and not study.trials:
         study.enqueue_trial(json.loads(args.fixed_params.read_text(encoding="utf-8")))

@@ -46,6 +46,7 @@ def run_all_parser():
     ap.add_argument("--patches-per-scene", type=int, default=2)
     ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
     ap.add_argument("--focal-gamma", type=float, default=2.0)
+    ap.add_argument("--amp", action="store_true", help="fp16 на CUDA для всех задач")
     return ap
 
 
@@ -54,7 +55,8 @@ def child_hpo_args(args, output_dir, target, features, data, n_trials, epochs, *
             "--target", target, "--features", features, "--seed", args.seed,
             "--n-trials", n_trials, "--epochs", epochs, "--workers", args.workers,
             "--patch-points", args.patch_points, "--patches-per-scene", args.patches_per_scene,
-            "--loss", args.loss, "--focal-gamma", args.focal_gamma, *extra]
+            "--loss", args.loss, "--focal-gamma", args.focal_gamma,
+            *(["--amp"] if args.amp else []), *extra]
 
 
 def write_final_params(params_path, params):

@@ -44,8 +44,11 @@ def patches(xy, n_points, rng):
                 yield np.sort(g), np.array([cx, cy], dtype=np.float32), rr
 
 
-def predict(model, arr, features, n_points, seed, device, torch):
-    """Предсказание по всей сцене: uint8 [N] — 1 целевой класс, 0 нет, 255 точка не покрыта."""
+def predict(model, arr, features, n_points, seed, device, torch, threshold=0.5):
+    """Предсказание по всей сцене: uint8 [N] — 1 целевой класс, 0 нет, 255 точка не покрыта.
+
+    Цель — средняя p(цель) >= threshold (порог из чекпоинта, подобран по Val при обучении).
+    """
     xyz = np.asarray(arr[:, XYZ], dtype=np.float32)
     n = len(xyz)
     ground = ground_grid(xyz) if features == "xyz_hag" else None
@@ -67,7 +70,7 @@ def predict(model, arr, features, n_points, seed, device, torch):
             seen[idx] += 1
             if i % 10 == 0 or i == len(todo):
                 print(f"патч {i}/{len(todo)} {time.time() - start:.0f}s", flush=True)
-    return np.where(seen > 0, (prob / np.maximum(seen, 1)) > 0.5, 255).astype(np.uint8)
+    return np.where(seen > 0, (prob / np.maximum(seen, 1)) >= threshold, 255).astype(np.uint8)
 
 
 def scene_metrics(pred, arr, target):
@@ -108,6 +111,7 @@ def main():
     features = info.get("features", "xyz")
     n_points = int(info.get("patch_points", 16384))
     seed = int(info.get("seed", 42))
+    threshold = float(ck.get("threshold", 0.5))  # у чекпоинтов до версии 6 порога нет
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(params, in_channels=FEATURE_CHANNELS[features]).to(device)
     model.load_state_dict(ck["model"])
@@ -119,10 +123,11 @@ def main():
         out = args.out or args.out_dir / f"{scene.stem}__{args.tag}.npy"
         print(f"=== сцена {k}/{len(args.scene)}: {scene.name}", flush=True)
         # Повторный запуск не пересчитывает готовые сцены.
-        if args.out_dir is not None and out.exists():
+        # Кэш годен, только если он новее чекпоинта: иначе маска получена другой моделью/порогом.
+        if args.out_dir is not None and out.exists() and out.stat().st_mtime >= args.checkpoint.stat().st_mtime:
             pred = np.load(out)
         else:
-            pred = predict(model, arr, features, n_points, seed, device, torch)
+            pred = predict(model, arr, features, n_points, seed, device, torch, threshold)
             out.parent.mkdir(parents=True, exist_ok=True)
             np.save(out, pred)
         m = scene_metrics(pred, arr, info["target"])
@@ -132,7 +137,7 @@ def main():
             rows.append(dict(scene=scene.name, path=str(scene), **m))
             # После каждой сцены: прерванная оценка уже видна в ML Studio.
             (args.out_dir / f"scenes__{args.tag}.json").write_text(
-                json.dumps(dict(model=dict(target=info["target"], features=features, checkpoint=str(args.checkpoint)),
+                json.dumps(dict(model=dict(target=info["target"], features=features, checkpoint=str(args.checkpoint), threshold=threshold),
                                 done=k, total=len(args.scene), scenes=rows), ensure_ascii=False, indent=1), encoding="utf-8")
 
 

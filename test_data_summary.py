@@ -29,6 +29,9 @@ class RunAllTests(unittest.TestCase):
         self.assertEqual(pairs["--patches-per-scene"], 3)
         self.assertEqual(pairs["--loss"], "focal")
         self.assertEqual(pairs["--focal-gamma"], 1.5)
+        self.assertNotIn("--amp", command)
+        amp = run_all.child_hpo_args(parser.parse_args(["--amp"]), Path("o"), "ground", "xyz", Path("t"), 1, 1)
+        self.assertIn("--amp", amp)
 
     def test_final_params_are_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,6 +156,56 @@ class PatchDatasetTests(unittest.TestCase):
             self.assertEqual(set(feat[:, 4].tolist()), {0.0, 1.0})
             self.assertEqual(int(feat[:, 4].sum()), 100)  # is_above_ground = ровно крона
 
+    def test_augment_is_seeded_similarity_and_keeps_labels(self):
+        import torch
+        rng = np.random.default_rng(2)
+        xyz = np.column_stack((rng.uniform(0, 50, (3000, 2)), rng.uniform(0, 5, 3000)))
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.scene(directory, xyz, np.where(xyz[:, 2] > 2, 5, 2))
+            plain, y = hpo.PatchDataset(paths, [5], 300, 1, 3)[0]
+            aug, y2 = hpo.PatchDataset(paths, [5], 300, 1, 3, augment=True)[0]
+            self.assertTrue((y == y2).all() and (aug == hpo.PatchDataset(paths, [5], 300, 1, 3, augment=True)[0][0]).all())
+            self.assertFalse(np.allclose(plain.numpy(), aug.numpy()))
+            # Поворот/отражение/масштаб: попарные расстояния меняются в одно число раз (FPS не меняется).
+            ratio = torch.cdist(aug, aug)[0, 1:] / torch.cdist(plain, plain)[0, 1:]
+            self.assertTrue(np.allclose(ratio.numpy(), float(ratio[0]), atol=1e-4))
+            self.assertTrue(hpo.AUG_SCALE[0] - 1e-4 <= float(ratio[0]) <= hpo.AUG_SCALE[1] + 1e-4)
+
+    def test_augment_keeps_hag_consistent_with_coordinates(self):
+        import torch
+        rng = np.random.default_rng(4)
+        ground = np.column_stack((rng.uniform(0, 30, (1500, 2)), rng.normal(0, 0.01, 1500)))
+        canopy = np.column_stack((rng.uniform(0, 30, (1500, 2)), np.full(1500, 3.0)))
+        xyz = np.vstack((ground, canopy)).astype(np.float32)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.scene(directory, xyz, np.full(3000, 2))
+            plain, _ = hpo.PatchDataset(paths, [2], 300, 1, 5, features="xyz_hag")[0]
+            aug, _ = hpo.PatchDataset(paths, [2], 300, 1, 5, features="xyz_hag", augment=True)[0]
+            scale = float((torch.cdist(aug[:, :3], aug[:, :3])[0, 1:] / torch.cdist(plain[:, :3], plain[:, :3])[0, 1:])[0])
+            self.assertTrue((aug[:, 4] == plain[:, 4]).all())  # флаг «над землёй» — по исходной высоте
+            mask = plain[:, 3] > 1e-3
+            self.assertTrue(mask.any())
+            self.assertTrue(np.allclose((aug[:, 3] / plain[:, 3])[mask].numpy(), scale, atol=1e-3))
+
+
+class PredictThresholdTests(unittest.TestCase):
+    def predict_with(self, p, threshold):
+        import math
+        import torch
+        import predict_scene
+
+        logits = torch.tensor([[0.0, math.log(p / (1 - p))]])
+        model = lambda f, xyz, batch: logits.repeat(len(f), 1)
+        rng = np.random.default_rng(0)
+        arr = np.zeros((600, 9), dtype=np.float32)
+        arr[:, 1:3] = rng.uniform(0, 20, (600, 2))
+        return predict_scene.predict(model, arr, "xyz", 300, 0, torch.device("cpu"), torch, threshold)
+
+    def test_threshold_decides_target(self):
+        low, high = self.predict_with(0.3, 0.25), self.predict_with(0.3, 0.5)
+        self.assertTrue((low[low != 255] == 1).all() and (low != 255).any())
+        self.assertTrue((high[high != 255] == 0).all())
+
 
 class MetricsTests(unittest.TestCase):
     def test_baseline_is_f1_of_predicting_all_ones(self):
@@ -167,6 +220,17 @@ class MetricsTests(unittest.TestCase):
         with self.assertLogs("hpo_pointnet", "WARNING"):
             m = hpo.binary_metrics(tp=0, fp=3, fn=0, n_neg=100)
         self.assertEqual((m["f1"], m["baseline_f1"]), (0.0, 0.0))
+
+
+    def test_threshold_is_tuned_on_histogram(self):
+        bins = hpo.THRESHOLD_BINS
+        neg, pos = np.zeros(bins, np.int64), np.zeros(bins, np.int64)
+        neg[10], neg[40], pos[30], pos[90] = 100, 10, 50, 50  # цель с p≈0.3 теряется при пороге 0.5
+        m = hpo.threshold_metrics(np.concatenate((neg, pos)))
+        self.assertAlmostEqual(m["threshold"], 0.3)  # 0.11..0.30 дают тот же F1; берётся ближайший к 0.5
+        self.assertAlmostEqual(m["f1"], 200 / 210)
+        self.assertAlmostEqual(m["f1_default"], 100 / 150)
+        self.assertEqual(m["confusion"], [[100, 10], [0, 100]])
 
 
 class EndToEndTests(unittest.TestCase):
@@ -194,6 +258,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(best["complete"], 2)
             self.assertEqual((best["seed"], best["target"], best["features"]), (42, "ground", "xyz"))
             self.assertTrue({"f1", "precision", "recall", "baseline_f1", "params"} <= best.keys())
+            self.assertTrue(0 < best["threshold"] < 1 and best["f1"] >= best["f1_default"])
             self.assertEqual(len(best["class_weights"]), 2)
             for split in ("train", "val"):
                 self.assertTrue({"iou", "f1", "precision", "recall"} <= best[split].keys())

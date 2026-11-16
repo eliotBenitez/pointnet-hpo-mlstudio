@@ -61,6 +61,11 @@ impl Run {
         [&self.split, &self.best].into_iter().flatten().find_map(|v| v.get(key)?.as_str().map(String::from))
     }
 
+    /// Версия пространства поиска из best.json (пишет hpo_pointnet.py с версии 7); None у старых прогонов.
+    pub fn space_version(&self) -> Option<u32> {
+        self.best.as_ref()?.get("search_space")?.as_u64().map(|v| v as u32)
+    }
+
     /// Класс прогона: split.json → best.json; None, если неизвестен.
     pub fn target(&self) -> Option<String> {
         self.info("target")
@@ -82,7 +87,7 @@ impl Run {
 }
 
 /// Версия пространства поиска, под которую написан SPACE (SEARCH_SPACE_VERSION в hpo_pointnet.py).
-pub const SPACE_VERSION: u32 = 5;
+pub const SPACE_VERSION: u32 = 7;
 
 /// SEARCH_SPACE_VERSION из hpo_pointnet.py корня проекта.
 pub fn script_space_version(root: &Path) -> Option<u32> {
@@ -91,7 +96,7 @@ pub fn script_space_version(root: &Path) -> Option<u32> {
     line.split('=').nth(1)?.split('#').next()?.trim().parse().ok()
 }
 
-// ---------- пространство гиперпараметров (зеркало run_trial в hpo_pointnet.py, SEARCH_SPACE_VERSION 5) ----------
+// ---------- пространство гиперпараметров (зеркало run_trial в hpo_pointnet.py, SEARCH_SPACE_VERSION 7) ----------
 
 pub type Params = serde_json::Map<String, serde_json::Value>;
 
@@ -111,8 +116,8 @@ pub struct Spec {
 }
 
 pub const SPACE: [Spec; 9] = [
-    Spec { key: "lr", label: "Learning rate", hint: "Adam, лог. шкала", kind: Kind::LogFloat(1e-4, 1e-2) },
-    Spec { key: "weight_decay", label: "Weight decay", hint: "L2 в Adam, лог. шкала", kind: Kind::LogFloat(1e-6, 1e-3) },
+    Spec { key: "lr", label: "Learning rate", hint: "AdamW, лог. шкала", kind: Kind::LogFloat(1e-4, 1e-2) },
+    Spec { key: "weight_decay", label: "Weight decay", hint: "AdamW (decoupled), лог. шкала", kind: Kind::LogFloat(1e-5, 1e-1) },
     Spec { key: "dropout", label: "Dropout", hint: "в голове сегментации", kind: Kind::Float(0.0, 0.5) },
     Spec { key: "batch_size", label: "Патчей в батче", hint: "≈16 тыс. точек на патч", kind: Kind::Choice(&["2", "3", "4"]) },
     Spec { key: "n_sa_layers", label: "SA-слоёв", hint: "глубина PointNet++", kind: Kind::Choice(&["2", "3", "4"]) },
@@ -191,6 +196,7 @@ pub struct Suggestion {
 pub fn suggest(runs: &[Run], target: &str) -> Suggestion {
     let collect = |any: bool| -> Vec<(f64, Params, String)> {
         runs.iter()
+            .filter(|r| r.space_version() == Some(SPACE_VERSION)) // trials старых версий несравнимы
             .filter(|r| any || r.target().as_deref() == Some(target))
             .flat_map(|r| r.trials.iter().map(move |t| (r, t)))
             .filter(|(_, t)| t.state == "COMPLETE")
@@ -833,7 +839,7 @@ mod tests {
         Run {
             name: name.into(),
             path: PathBuf::new(),
-            best: Some(serde_json::json!({ "target": target })),
+            best: Some(serde_json::json!({ "target": target, "search_space": SPACE_VERSION })),
             split: None,
             studio: None,
             scene_eval: None,
@@ -864,6 +870,17 @@ mod tests {
         assert_eq!(s.params["n_sa_layers"], 3);
         // своих trials нет → берутся все классы
         assert!(suggest(&runs, "noise").all_classes);
+    }
+
+    #[test]
+    fn suggest_ignores_runs_of_other_space_versions() {
+        let a = r#"{"lr": 0.001}"#;
+        let mut old = run("old", "ground", &[("COMPLETE", 0.9, a)]);
+        old.best = Some(serde_json::json!({ "target": "ground", "search_space": SPACE_VERSION - 1 }));
+        let mut unversioned = run("none", "ground", &[("COMPLETE", 0.9, a)]);
+        unversioned.best = Some(serde_json::json!({ "target": "ground" }));
+        let s = suggest(&[old, unversioned], "ground");
+        assert_eq!(s.of, 0);
     }
 
     #[test]

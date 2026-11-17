@@ -72,19 +72,48 @@ class FpsCache:
         return order + torch.tensor(starts, device=pos.device)[:, None]
 
 
-def make_criterion(name, weights, gamma=2.0):
-    """CrossEntropyLoss или Focal Loss (Lin et al., 2017) с теми же весами классов как alpha."""
+def lovasz_softmax(probas, labels):
+    """Lovász-Softmax (Berman et al., CVPR 2018) по всем точкам батча, среднее по классам батча.
+
+    probas — [N, C]; https://github.com/bermanmaxim/LovaszSoftmax (MIT), перенесено из версии Авина.
+    """
+    import torch
+    losses = []
+    for c in range(probas.shape[1]):
+        fg = (labels == c).to(probas.dtype)
+        if not bool(fg.any()):
+            continue
+        errors, order = (fg - probas[:, c]).abs().sort(descending=True)
+        fg = fg[order]
+        jaccard = 1 - (fg.sum() - fg.cumsum(0)) / (fg.sum() + (1 - fg).cumsum(0))
+        losses.append(torch.dot(errors, torch.cat((jaccard[:1], jaccard[1:] - jaccard[:-1]))))
+    return torch.stack(losses).mean() if losses else probas.sum() * 0
+
+
+def make_criterion(name, weights, gamma=2.0, lovasz_weight=0.5):
+    """CE, Focal Loss (Lin et al., 2017) с весами классов как alpha, или (1-w)·Focal + w·Lovász.
+
+    Вызов: criterion(logits, y, point_weight=None); point_weight множит веса точек в CE/Focal
+    (Lovász весов не использует: он оптимизирует IoU напрямую).
+    """
     import torch
     import torch.nn.functional as F
-    if name == "ce":
-        return torch.nn.CrossEntropyLoss(weight=weights)
+    if name not in ("ce", "focal", "focal_lovasz"):
+        raise ValueError(f"Неизвестная функция потерь: {name}")
 
-    def focal(logits, y):
+    def base(logits, y, point_weight=None):
         ce = F.cross_entropy(logits, y, reduction="none")
-        w = weights[y]
-        # Нормировка как у взвешенного CE (mean): при gamma=0 совпадает с CrossEntropyLoss.
-        return (w * (1 - torch.exp(-ce)) ** gamma * ce).sum() / w.sum()
-    return focal
+        w = weights[y] if point_weight is None else weights[y] * point_weight
+        if name != "ce":
+            ce = (1 - torch.exp(-ce)) ** gamma * ce
+        # Нормировка как у взвешенного CE (mean): при gamma=0 focal совпадает с CrossEntropyLoss.
+        return (w * ce).sum() / w.sum()
+
+    if name != "focal_lovasz":
+        return base
+    return lambda logits, y, point_weight=None: (
+        (1 - lovasz_weight) * base(logits, y, point_weight)
+        + lovasz_weight * lovasz_softmax(logits.float().softmax(dim=1), y))
 
 
 def forward(model, feat, batch, keys=None, cache=None):

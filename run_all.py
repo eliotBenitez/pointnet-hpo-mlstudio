@@ -44,8 +44,16 @@ def run_all_parser():
     ap.add_argument("--workers", type=int, default=0)
     ap.add_argument("--patch-points", type=int, default=16384)
     ap.add_argument("--patches-per-scene", type=int, default=2)
-    ap.add_argument("--loss", choices=["ce", "focal"], default="ce")
+    ap.add_argument("--loss", choices=["ce", "focal", "focal_lovasz"], default="ce")
     ap.add_argument("--focal-gamma", type=float, default=2.0)
+    # Те же настройки обучения, что у hpo_pointnet.py; по умолчанию — прежнее обучение.
+    ap.add_argument("--lovasz-weight", type=float, default=0.5)
+    ap.add_argument("--class-weight-power", type=float, default=1.0)
+    ap.add_argument("--equibatch", action="store_true")
+    ap.add_argument("--equibatch-positive-fraction", type=float, default=0.5)
+    ap.add_argument("--boundary-patch-fraction", type=float, default=0.0)
+    ap.add_argument("--boundary-weight", type=float, default=1.0)
+    ap.add_argument("--boundary-radius", type=float, default=0.5)
     ap.add_argument("--amp", action="store_true", help="fp16 на CUDA для всех задач")
     return ap
 
@@ -56,7 +64,32 @@ def child_hpo_args(args, output_dir, target, features, data, n_trials, epochs, *
             "--n-trials", n_trials, "--epochs", epochs, "--workers", args.workers,
             "--patch-points", args.patch_points, "--patches-per-scene", args.patches_per_scene,
             "--loss", args.loss, "--focal-gamma", args.focal_gamma,
+            "--lovasz-weight", args.lovasz_weight, "--class-weight-power", args.class_weight_power,
+            "--equibatch-positive-fraction", args.equibatch_positive_fraction,
+            "--boundary-patch-fraction", args.boundary_patch_fraction,
+            "--boundary-weight", args.boundary_weight, "--boundary-radius", args.boundary_radius,
+            *(["--equibatch"] if args.equibatch else []),
             *(["--amp"] if args.amp else []), *extra]
+
+
+def train_tag(args):
+    """Суффикс каталогов: study с другими настройками обучения не продолжится (как TrainOpts::suffix в mlstudio)."""
+    tag = {"ce": "", "focal": "_focal", "focal_lovasz": "_focal_lovasz"}[args.loss]
+    if args.loss != "ce" and args.focal_gamma != 2:
+        tag += f"_g{args.focal_gamma:g}"
+    if args.loss == "focal_lovasz" and args.lovasz_weight != 0.5:
+        tag += f"_lw{args.lovasz_weight:g}"
+    if args.class_weight_power != 1:
+        tag += f"_cw{args.class_weight_power:g}"
+    if args.equibatch:
+        tag += "_eq" + ("" if args.equibatch_positive_fraction == 0.5 else f"{args.equibatch_positive_fraction:g}")
+    if args.boundary_patch_fraction:
+        tag += f"_bf{args.boundary_patch_fraction:g}"
+    if args.boundary_weight != 1:
+        tag += f"_bw{args.boundary_weight:g}"
+    if (args.boundary_patch_fraction or args.boundary_weight != 1) and args.boundary_radius != 0.5:
+        tag += f"_br{args.boundary_radius:g}"
+    return tag
 
 
 def write_final_params(params_path, params):
@@ -74,7 +107,7 @@ def main():
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     # Study с другим loss hpo_pointnet.py не продолжит: focal-прогоны идут в свои каталоги.
     # Gamma в имени: study с другой gamma тоже не продолжится (2 — по умолчанию, без суффикса).
-    tag = "" if args.loss != "focal" else "_focal" if args.focal_gamma == 2 else f"_focal_g{args.focal_gamma:g}"
+    tag = train_tag(args)
     selected = [(t, name + tag, *rest) for t, name, *rest in RUNS_PLAN if t in args.tasks]
 
     with (args.runs / "run_all.log").open("a", encoding="utf-8") as log:

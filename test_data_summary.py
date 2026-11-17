@@ -33,6 +33,17 @@ class RunAllTests(unittest.TestCase):
         amp = run_all.child_hpo_args(parser.parse_args(["--amp"]), Path("o"), "ground", "xyz", Path("t"), 1, 1)
         self.assertIn("--amp", amp)
 
+    def test_train_tag_matches_gui_suffix(self):
+        parser = run_all.run_all_parser()
+        self.assertEqual(run_all.train_tag(parser.parse_args([])), "")
+        self.assertEqual(run_all.train_tag(parser.parse_args(["--loss", "focal", "--focal-gamma", "1.5"])), "_focal_g1.5")
+        args = parser.parse_args(["--loss", "focal_lovasz", "--class-weight-power", "0.47", "--equibatch",
+                                  "--boundary-patch-fraction", "0.5", "--boundary-weight", "2"])
+        self.assertEqual(run_all.train_tag(args), "_focal_lovasz_cw0.47_eq_bf0.5_bw2")  # как в mlstudio
+        child = [str(a) for a in run_all.child_hpo_args(args, "out", "water", "xyz", "d", 1, 1)]
+        self.assertIn("--equibatch", child)
+        self.assertEqual(child[child.index("--class-weight-power") + 1], "0.47")
+
     def test_final_params_are_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "run.params.json"
@@ -231,6 +242,62 @@ class MetricsTests(unittest.TestCase):
         self.assertAlmostEqual(m["f1"], 200 / 210)
         self.assertAlmostEqual(m["f1_default"], 100 / 150)
         self.assertEqual(m["confusion"], [[100, 10], [0, 100]])
+
+
+class BalancedTrainingTests(unittest.TestCase):
+    """Механики из версии Авина: баланс патчей, граница, степень весов, Focal+Lovász."""
+
+    def test_class_weight_power_softens_rare_class(self):
+        counts = np.array([95, 5])
+        self.assertTrue(np.allclose(hpo.class_weights(counts, 0.5) ** 2, hpo.class_weights(counts)))
+        self.assertTrue(np.allclose(hpo.class_weights(counts, 0), 1))
+
+    def test_boundary_band_is_on_both_sides(self):
+        from hpo_core.data import boundary_index
+        xyz = np.column_stack((np.arange(10.0), np.zeros(10), np.zeros(10)))
+        mask, anchors, pairs = boundary_index(xyz, np.arange(10) >= 5, radius=1.0)
+        self.assertEqual(np.flatnonzero(mask).tolist(), [4, 5])
+        self.assertEqual(sorted(zip(anchors.tolist(), pairs.tolist())), [(4, 5), (5, 4)])
+
+    def test_balanced_patches_follow_quotas_and_weight_boundary(self):
+        rng = np.random.default_rng(3)
+        xyz = np.column_stack((rng.uniform(0, 100, (4000, 2)), rng.normal(0, 1, 4000)))
+        labels = np.where(xyz[:, 0] > 90, 9, 2)  # редкая «вода» у края сцены
+        with tempfile.TemporaryDirectory() as directory:
+            paths = PatchDatasetTests.scene(None, directory, xyz, labels)
+            ds = hpo.PatchDataset(paths, [9], 200, 8, 0, positive_fraction=0.5,
+                                  boundary_fraction=0.5, boundary_weight=2.0, boundary_radius=2.0)
+            self.assertEqual([ds.kind(i) for i in range(8)], [2, 1, 2, 0, 2, 1, 2, 0])
+            for i in range(8):
+                _, y, w = ds[i]
+                kind = ds.kind(i)
+                if kind == 2:
+                    self.assertEqual(set(y.tolist()), {0, 1})  # обе стороны границы в патче
+                if kind == 1:
+                    self.assertTrue(y.any())
+                self.assertTrue(set(w.tolist()) <= {1.0, 2.0})
+            self.assertTrue((ds[0][2] == 2).any())
+            # По умолчанию патчи прежние и без весов.
+            plain = hpo.PatchDataset(paths, [9], 200, 8, 0)
+            self.assertIsNone(plain.kind(0))
+            self.assertEqual(len(plain[0]), 2)
+
+    def test_focal_lovasz(self):
+        import torch
+        from hpo_core.model import lovasz_softmax
+        y = torch.tensor([0, 0, 1, 1])
+        self.assertAlmostEqual(float(lovasz_softmax(torch.nn.functional.one_hot(y, 2).float(), y)), 0)
+        logits = torch.randn(4, 2, requires_grad=True)
+        weights = torch.tensor([0.5, 2.0])
+        focal = hpo.make_criterion("focal", weights)
+        x = logits.detach()
+        self.assertAlmostEqual(float(focal(x, y)), float(focal(x, y, torch.ones(4))), places=6)
+        loss = hpo.make_criterion("focal_lovasz", weights, lovasz_weight=0.5)(logits, y, torch.ones(4))
+        loss.backward()
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        ce = hpo.make_criterion("ce", weights)
+        self.assertAlmostEqual(float(ce(x, y)),
+                               float(torch.nn.CrossEntropyLoss(weight=weights)(x, y)), places=6)
 
 
 class EndToEndTests(unittest.TestCase):

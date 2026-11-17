@@ -9,6 +9,7 @@
 !/run_all.ps1
 !/run_all.sh
 !/mlstudio/
+!/hpo_core/
 
 # --- Внутри mlstudio ---
 /mlstudio/target/

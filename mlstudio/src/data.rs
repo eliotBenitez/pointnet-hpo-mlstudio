@@ -601,6 +601,11 @@ pub fn record_launch(root: &Path, out_dir: &Path, launch: serde_json::Value) -> 
     let snap = out_dir.join(SNAPSHOT);
     if !snap.exists() {
         fs::copy(root.join("hpo_pointnet.py"), snap)?;
+        let core = out_dir.join(SNAPSHOT_CORE);
+        fs::create_dir_all(&core)?;
+        for (name, bytes) in py_files(&root.join(CORE)) {
+            fs::write(core.join(name), bytes)?;
+        }
     }
     update_studio(out_dir, |v| {
         if !v["launches"].is_array() {
@@ -618,10 +623,32 @@ pub fn update_studio(out_dir: &Path, f: impl FnOnce(&mut serde_json::Value)) -> 
     fs::write(file, serde_json::to_vec_pretty(&v).unwrap())
 }
 
-/// Отличается ли текущий hpo_pointnet.py от копии в прогоне; None — копии нет.
+/// Модули движка, которые импортирует hpo_pointnet.py.
+const CORE: &str = "hpo_core";
+/// Копия *.py из hpo_core/ на момент первого запуска (рядом с SNAPSHOT).
+pub const SNAPSHOT_CORE: &str = "hpo_core.snapshot";
+
+/// *.py каталога (имя, содержимое) по имени; нет каталога — пусто.
+fn py_files(dir: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "py"))
+        .filter_map(|e| Some((e.file_name(), fs::read(e.path()).ok()?)))
+        .collect();
+    files.sort();
+    files
+}
+
+/// Отличается ли текущий код движка (hpo_pointnet.py + hpo_core/*.py) от копии в прогоне; None — копии нет.
+/// У прогонов до разбиения на модули копии hpo_core нет: появившийся пакет считается изменением.
 pub fn script_changed(root: &Path, run_dir: &Path) -> Option<bool> {
     let snap = fs::read(run_dir.join(SNAPSHOT)).ok()?;
-    Some(fs::read(root.join("hpo_pointnet.py")).ok().is_none_or(|cur| cur != snap))
+    Some(
+        fs::read(root.join("hpo_pointnet.py")).ok().is_none_or(|cur| cur != snap)
+            || py_files(&root.join(CORE)) != py_files(&run_dir.join(SNAPSHOT_CORE)),
+    )
 }
 
 /// Имя пользователя и компьютера — кто запустил прогон.
@@ -973,6 +1000,14 @@ mod tests {
         record_launch(&root, &out, serde_json::json!({"n": 2})).unwrap();
         // копия — от первого запуска
         assert_eq!(script_changed(&root, &out), Some(true));
+        // правка модуля hpo_core/ тоже считается изменением
+        let out2 = root.join("runs").join("y");
+        fs::create_dir_all(root.join("hpo_core")).unwrap();
+        fs::write(root.join("hpo_core").join("data.py"), "a").unwrap();
+        record_launch(&root, &out2, serde_json::json!({"n": 1})).unwrap();
+        assert_eq!(script_changed(&root, &out2), Some(false));
+        fs::write(root.join("hpo_core").join("data.py"), "b").unwrap();
+        assert_eq!(script_changed(&root, &out2), Some(true));
         update_studio(&out, |v| v["note"] = "заметка".into()).unwrap();
         let v = read_json(&out.join(STUDIO_FILE)).unwrap();
         assert_eq!(v["launches"].as_array().unwrap().len(), 2);

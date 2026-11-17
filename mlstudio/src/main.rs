@@ -4333,10 +4333,10 @@ impl Studio {
                             "Скрипт",
                             match script {
                                 Some(false) => {
-                                    "hpo_pointnet.py не менялся с первого запуска".into()
+                                    "Код движка (hpo_pointnet.py, hpo_core/) не менялся с первого запуска".into()
                                 }
                                 Some(true) => {
-                                    "hpo_pointnet.py изменён после запуска — повтор не будет точным"
+                                    "Код движка (hpo_pointnet.py, hpo_core/) изменён после запуска — повтор не будет точным"
                                         .into()
                                 }
                                 None => "копии нет — прогон запущен не из ML Studio".into(),

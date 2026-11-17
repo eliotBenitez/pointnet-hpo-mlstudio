@@ -150,6 +150,41 @@ def grow_circle(d2, r, need):
     return idx, r
 
 
+def boundary_index(xyz, target, radius, space="xyz", chunk_size=100000):
+    """Пограничная полоса по обе стороны границы классов (перенесено из версии Авина).
+
+    Точка пограничная, если в радиусе radius (исходные единицы, до нормировки патча) есть точка
+    другого класса. Возвращает маску, индексы таких точек и индексы ближайших точек другого класса.
+    """
+    from scipy.spatial import cKDTree
+    if not math.isfinite(radius) or radius <= 0 or space not in ("xy", "xyz"):
+        raise ValueError("boundary radius должен быть > 0, space — xy или xyz")
+    coords = np.asarray(xyz, dtype=np.float64)[:, :2 if space == "xy" else 3]
+    target = np.asarray(target, dtype=bool)
+    mask = np.zeros(len(target), dtype=bool)
+    anchors, neighbors = [], []
+    if target.any() and not target.all():
+        for kind in (False, True):
+            own = np.flatnonzero(target == kind)
+            opposite = np.flatnonzero(target != kind)
+            tree = cKDTree(coords[opposite])
+            for start in range(0, len(own), chunk_size):
+                query = own[start:start + chunk_size]
+                distance, closest = tree.query(coords[query], k=1)
+                valid = distance <= radius
+                mask[query[valid]] = True
+                anchors.append(query[valid])
+                neighbors.append(opposite[closest[valid]])
+    empty = np.empty(0, dtype=np.int64)
+    return (mask, np.concatenate(anchors) if anchors else empty,
+            np.concatenate(neighbors) if neighbors else empty)
+
+
+def quota(i, fraction):
+    """1, если i-й элемент попадает в долю fraction (равномерное округление по индексам)."""
+    return math.floor((i + 1) * fraction + 0.5) - math.floor(i * fraction + 0.5)
+
+
 class PatchDataset:
     """Патч = точки в круге (по XY) вокруг случайного центра, метки 0/1.
 
@@ -159,12 +194,26 @@ class PatchDataset:
     Координаты патча центрируются и делятся на радиус, поэтому radius_l0 задан в долях патча.
     augment (только Train): поворот вокруг Z, отражение и масштаб от того же (seed, epoch, index);
     расстояния меняются в одно число раз, поэтому порядок FPS (и FpsCache) остаётся корректным.
+
+    Только Train, по идеям Авина (все выключены по умолчанию — тогда патчи как раньше):
+    positive_fraction — доля патчей с центром на точке цели (остальные — на фоне), сцена выбирается
+    среди сцен с нужным классом; boundary_fraction — доля патчей с центром на границе классов
+    (в патч гарантированно попадают обе стороны); boundary_weight > 1 — множитель веса
+    пограничных точек в CE/Focal (третий элемент патча). Вид патча задаётся индексом, сцена и
+    центр — (seed, epoch, index), а не batch_size, поэтому кеш FPS общий для всех trials.
     """
 
     def __init__(self, paths, target_ids, n_points=16384, patches_per_scene=2, seed=42,
-                 features="xyz", augment=False):
+                 features="xyz", augment=False, positive_fraction=None, boundary_fraction=0.0,
+                 boundary_weight=1.0, boundary_radius=0.5, boundary_space="xyz"):
         if features not in FEATURE_CHANNELS:
             raise ValueError(f"features должен быть одним из {list(FEATURE_CHANNELS)}")
+        if positive_fraction is not None and not 0 < positive_fraction < 1:
+            raise ValueError("positive_fraction должна быть строго между 0 и 1")
+        if not 0 <= boundary_fraction < 1 or (boundary_fraction and positive_fraction is None):
+            raise ValueError("boundary_fraction в [0, 1) и только вместе с positive_fraction")
+        if not math.isfinite(boundary_weight) or boundary_weight < 1:
+            raise ValueError("boundary_weight должен быть >= 1")
         self.paths = list(paths)
         self.target_ids = list(target_ids)
         self.n_points = n_points
@@ -177,6 +226,31 @@ class PatchDataset:
         self._ground = [ground_grid(np.asarray(np.load(p, mmap_mode="r", allow_pickle=False)[:, XYZ],
                                                dtype=np.float32))
                         for p in self.paths] if features == "xyz_hag" else None
+        self.positive_fraction = positive_fraction
+        self.boundary_fraction = boundary_fraction
+        self.boundary_weight = boundary_weight
+        self._positive = self._boundary = None
+        if positive_fraction is not None:
+            self._positive = [np.flatnonzero(np.isin(self._labels(s), self.target_ids))
+                              for s in range(len(self.paths))]
+            self._scenes = [[s for s, p in enumerate(self._positive) if len(p) < len(self._labels(s))],
+                            [s for s, p in enumerate(self._positive) if len(p)]]
+            if not all(self._scenes):
+                raise ValueError("Для баланса патчей в Train нужны и точки цели, и точки фона")
+        if boundary_fraction or boundary_weight > 1:
+            # (маска, пограничные точки, ближайшая точка другого класса) по каждой сцене
+            self._boundary = [boundary_index(np.load(p, mmap_mode="r", allow_pickle=False)[:, XYZ],
+                                             np.isin(self._labels(s), self.target_ids),
+                                             boundary_radius, boundary_space)
+                              for s, p in enumerate(self.paths)]
+            self._scenes_boundary = [s for s, b in enumerate(self._boundary) if len(b[1])]
+            if boundary_fraction and not self._scenes_boundary:
+                raise ValueError("В Train нет пограничных точек; проверьте boundary_radius и единицы")
+            LOG.info("Пограничных точек в Train: %s (радиус %g, %s)",
+                     sum(int(b[0].sum()) for b in self._boundary), boundary_radius, boundary_space)
+
+    def _labels(self, scene):
+        return np.load(self.paths[scene], mmap_mode="r", allow_pickle=False)[:, LABEL_COL]
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -184,18 +258,47 @@ class PatchDataset:
     def __len__(self):
         return len(self.paths) * self.patches_per_scene
 
+    def kind(self, index):
+        """Вид патча: None — случайный центр (как раньше), 2 — граница, 1 — цель, 0 — фон."""
+        if self.positive_fraction is None:
+            return None
+        if quota(index, self.boundary_fraction):
+            return 2
+        regular = index - math.floor(index * self.boundary_fraction + 0.5)  # номер среди не граничных
+        return quota(regular, self.positive_fraction)
+
     def __getitem__(self, index):
         import torch
-        scene = index // self.patches_per_scene
-        arr = np.load(self.paths[scene], mmap_mode="r", allow_pickle=False)
         rng = np.random.default_rng([self.seed, self.epoch, index])
+        kind = self.kind(index)
+        scene = (index // self.patches_per_scene if kind is None else
+                 int(rng.choice(self._scenes_boundary if kind == 2 else self._scenes[kind])))
+        arr = np.load(self.paths[scene], mmap_mode="r", allow_pickle=False)
         xy = np.asarray(arr[:, XY], dtype=np.float32)
         n = len(xy)
-        center = xy[rng.integers(n)]
+        required = None
+        if kind == 2:
+            slot = int(rng.integers(len(self._boundary[scene][1])))
+            required = np.array([self._boundary[scene][1][slot], self._boundary[scene][2][slot]])
+        elif kind == 1:
+            required = np.array([rng.choice(self._positive[scene])])
+        elif kind == 0:
+            target = np.isin(np.asarray(arr[:, LABEL_COL]), self.target_ids)
+            required = np.array([rng.choice(np.flatnonzero(~target))])
+        anchor = int(rng.integers(n)) if required is None else int(required[0])
+        center = xy[anchor]
         d2 = ((xy - center) ** 2).sum(1)
-        idx, r = grow_circle(d2, patch_radius(xy, self.n_points), min(self.n_points, n))
+        radius = patch_radius(xy, self.n_points)
+        if kind == 2:  # круг захватывает и пару с другой стороны границы
+            radius = max(radius, math.sqrt(float(d2[required[1]])) * (1 + 1e-6))
+        idx, r = grow_circle(d2, radius, min(self.n_points, n))
         if len(idx) > self.n_points:
-            idx = np.sort(rng.choice(idx, self.n_points, replace=False))
+            if required is None:
+                idx = np.sort(rng.choice(idx, self.n_points, replace=False))
+            else:  # прореживание не выбрасывает центр (и пару на границе)
+                rest = idx[~np.isin(idx, required)]
+                idx = np.sort(np.concatenate((rng.choice(rest, self.n_points - len(required),
+                                                         replace=False), required)))
         xyz = np.asarray(arr[idx, XYZ], dtype=np.float32)
         shift = np.array([center[0], center[1], xyz[:, 2].min()], dtype=np.float32)
         feat = (xyz - shift) / r
@@ -211,7 +314,11 @@ class PatchDataset:
             hag = hag_at(xyz, *self._ground[scene])  # по исходным координатам, затем тот же масштаб
             feat = np.column_stack((feat, hag / r * scale, hag > ABOVE_GROUND_THRESHOLD))
         y = np.isin(np.asarray(arr[idx, LABEL_COL]), self.target_ids).astype(np.int64)
-        return torch.from_numpy(feat.astype(np.float32)), torch.from_numpy(y)  # колонки 0–2 — координаты
+        result = torch.from_numpy(feat.astype(np.float32)), torch.from_numpy(y)  # колонки 0–2 — координаты
+        if self.boundary_weight > 1:
+            w = np.where(self._boundary[scene][0][idx], self.boundary_weight, 1).astype(np.float32)
+            return (*result, torch.from_numpy(w))
+        return result
 
 
 class Keyed:
@@ -227,8 +334,8 @@ class Keyed:
         return len(self.dataset)
 
     def __getitem__(self, index):
-        feat, y = self.dataset[index]
-        return feat, y, (self.dataset.epoch, index, len(y))
+        feat, y, *weight = self.dataset[index]
+        return (feat, y, (self.dataset.epoch, index, len(y)), *weight)
 
 
 def class_counts(paths, target_ids):
@@ -240,11 +347,16 @@ def class_counts(paths, target_ids):
     return counts
 
 
-def class_weights(counts):
-    """Веса для CrossEntropyLoss по Train (среднее = 1): редкий целевой класс весит больше."""
+def class_weights(counts, power=1.0):
+    """Веса для CrossEntropyLoss по Train (среднее = 1): редкий целевой класс весит больше.
+
+    power < 1 смягчает слишком большой вес редкого класса (у Авина для воды 0.47: 21.5 → 4.2).
+    """
     if not np.all(counts):
         raise ValueError("В Train отсутствует один из классов")
-    return counts.sum() / (2 * counts.astype(np.float64))
+    if not 0 <= power <= 1:
+        raise ValueError("Степень весов классов должна быть от 0 до 1")
+    return (counts.sum() / (2 * counts.astype(np.float64))) ** power
 
 
 def collate_flat(items):
@@ -254,6 +366,8 @@ def collate_flat(items):
     batch = torch.cat([torch.full((len(item[1]),), i, dtype=torch.long)
                        for i, item in enumerate(items)])
     keys = [item[2] for item in items] if len(items[0]) > 2 else None  # есть только у Keyed
+    if len(items[0]) == 4:  # веса пограничных точек
+        return pos, batch, y, keys, torch.cat([item[3] for item in items])
     return pos, batch, y, keys
 
 

@@ -99,7 +99,13 @@ def generate_report(study, output_path, run_info, data_summary=None, importances
 
 
 COMPATIBILITY_FIELDS = ("data_dir", "seed", "epochs", "target", "features",
-                       "patch_points", "patches_per_scene", "loss")
+                       "patch_points", "patches_per_scene", "loss", "class_weight_power",
+                       "positive_fraction", "boundary_fraction", "boundary_weight",
+                       "boundary_radius", "boundary_space")
+# Значения полей, которых нет у studies, записанных до их появления (= прежнее обучение).
+COMPATIBILITY_DEFAULTS = {"class_weight_power": 1.0, "positive_fraction": None,
+                          "boundary_fraction": 0.0, "boundary_weight": 1.0,
+                          "boundary_radius": None, "boundary_space": None}
 
 
 def compatibility_info(run_info):
@@ -119,7 +125,8 @@ def study_compatibility_error(study_attrs, run_info):
     if not isinstance(actual, dict):
         return "у study отсутствуют параметры совместимости; укажите новую --output-dir"
     differences = [key for key in COMPATIBILITY_FIELDS
-                   if not compat_value_matches(key, actual.get(key), expected.get(key))]
+                   if not compat_value_matches(key, actual.get(key, COMPATIBILITY_DEFAULTS.get(key)),
+                                                expected.get(key))]
     if differences:
         changed = ", ".join(differences)
         return f"у study отличаются параметры совместимости: {changed}; укажите новую --output-dir"

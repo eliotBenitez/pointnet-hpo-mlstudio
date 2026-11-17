@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import platform
 import shutil
 import time
@@ -89,9 +90,26 @@ def main(argv=None):
     parser.add_argument("--fixed-params", type=Path, default=None,
                         help="JSON с гиперпараметрами (например params из best.json): первым "
                              "trial обучается ровно эта конфигурация — для финальных прогонов")
-    parser.add_argument("--loss", choices=["ce", "focal"], default="ce",
-                        help="ce — взвешенная CrossEntropyLoss, focal — Focal Loss с теми же весами")
-    parser.add_argument("--focal-gamma", type=float, default=2.0, help="gamma для --loss focal")
+    parser.add_argument("--loss", choices=["ce", "focal", "focal_lovasz"], default="ce",
+                        help="ce — взвешенная CrossEntropyLoss, focal — Focal Loss с теми же весами, "
+                             "focal_lovasz — (1-w)*Focal + w*Lovász-Softmax")
+    parser.add_argument("--focal-gamma", type=float, default=2.0, help="gamma для focal и focal_lovasz")
+    parser.add_argument("--lovasz-weight", type=float, default=0.5,
+                        help="Доля Lovász в focal_lovasz, от 0 до 1")
+    parser.add_argument("--class-weight-power", type=float, default=1.0,
+                        help="Степень обратных частот классов: 1 — как раньше, 0.47 — мягче (Авин), 0 — без весов")
+    parser.add_argument("--equibatch", action="store_true",
+                        help="Train: часть патчей с центром на точке цели, остальные — на фоне")
+    parser.add_argument("--equibatch-positive-fraction", type=float, default=0.5,
+                        help="Доля патчей с центром на цели среди не граничных, 0 < доля < 1")
+    parser.add_argument("--boundary-patch-fraction", type=float, default=0.0,
+                        help="Train: доля патчей с центром на границе классов, [0, 1); нужна --equibatch")
+    parser.add_argument("--boundary-weight", type=float, default=1.0,
+                        help="Множитель веса пограничных точек в CE/Focal, >= 1; 1 — выключено")
+    parser.add_argument("--boundary-radius", type=float, default=0.5,
+                        help="Радиус поиска точки другого класса, в исходных единицах координат")
+    parser.add_argument("--boundary-space", choices=["xyz", "xy"], default="xyz",
+                        help="Расстояние до другого класса: 3D или по XY")
     parser.add_argument("--amp", action="store_true",
                         help="Смешанная точность fp16 на CUDA (быстрее, меньше памяти); на CPU не действует")
     parser.add_argument("--wandb-api-key", default=None, help="Не записывается в артефакты")
@@ -99,6 +117,33 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     if min(args.n_trials, args.epochs, args.patch_points, args.patches_per_scene) < 1:
         parser.error("n-trials, epochs, patch-points и patches-per-scene должны быть положительными")
+    if not 0 <= args.lovasz_weight <= 1:
+        parser.error("lovasz-weight должна быть от 0 до 1")
+    if not 0 <= args.class_weight_power <= 1:
+        parser.error("class-weight-power должна быть от 0 до 1")
+    if not 0 < args.equibatch_positive_fraction < 1:
+        parser.error("equibatch-positive-fraction должна быть строго между 0 и 1")
+    if not 0 <= args.boundary_patch_fraction < 1:
+        parser.error("boundary-patch-fraction должна быть в [0, 1)")
+    if args.boundary_patch_fraction and not args.equibatch:
+        parser.error("boundary-patch-fraction требует --equibatch")
+    if not math.isfinite(args.boundary_weight) or args.boundary_weight < 1:
+        parser.error("boundary-weight должна быть >= 1")
+    if not math.isfinite(args.boundary_radius) or args.boundary_radius <= 0:
+        parser.error("boundary-radius должна быть > 0")
+    if args.boundary_weight > 1 and args.loss == "focal_lovasz" and args.lovasz_weight == 1:
+        parser.error("boundary-weight действует только на долю CE/Focal; уменьшите lovasz-weight")
+    loss = "ce" if args.loss == "ce" else f"focal(gamma={args.focal_gamma:g})"
+    if args.loss == "focal_lovasz":
+        loss = f"(1-{args.lovasz_weight:g})*{loss}+{args.lovasz_weight:g}*lovasz"
+    boundary = args.boundary_patch_fraction > 0 or args.boundary_weight > 1
+    # Параметры обучения, при которых trials сопоставимы (и попадают в run_info/best.json).
+    training = dict(
+        loss=loss, class_weight_power=args.class_weight_power,
+        positive_fraction=args.equibatch_positive_fraction if args.equibatch else None,
+        boundary_fraction=args.boundary_patch_fraction, boundary_weight=args.boundary_weight,
+        boundary_radius=args.boundary_radius if boundary else None,
+        boundary_space=args.boundary_space if boundary else None)
     # Зависимости импортируем после разбора аргументов для понятного --help.
     import optuna
     import torch
@@ -121,8 +166,7 @@ def main(argv=None):
         if existing.trials:
             requested = dict(data_dir=str(args.data_dir), seed=args.seed, epochs=args.epochs,
                              target=args.target, features=args.features, patch_points=args.patch_points,
-                             patches_per_scene=args.patches_per_scene,
-                             loss="ce" if args.loss == "ce" else f"focal(gamma={args.focal_gamma:g})")
+                             patches_per_scene=args.patches_per_scene, **training)
             error = study_compatibility_error(existing.user_attrs, requested)
             if error:
                 raise SystemExit(f"{args.output_dir}: {error}")
@@ -138,7 +182,9 @@ def main(argv=None):
         "# Сводка исходного датасета\n\n" + data_summary, encoding="utf-8")
     train_paths, val_paths = split_scenes(load_scenes(args.data_dir), args.seed)
     train = PatchDataset(train_paths, target_ids, args.patch_points,
-                         args.patches_per_scene, args.seed, args.features, augment=True)
+                         args.patches_per_scene, args.seed, args.features, augment=True,
+                         **{k: v for k, v in training.items()
+                            if k not in ("loss", "class_weight_power") and v is not None})
     val = PatchDataset(val_paths, target_ids, args.patch_points,
                        args.patches_per_scene, args.seed, args.features)
     # Длина порядка = верх n_points_l0, чтобы префикс покрывал любой trial. Хранить стоит только
@@ -147,7 +193,7 @@ def main(argv=None):
     train_cache = FpsCache(N_POINTS_L0_MAX, True, args.seed, keep)
     val_cache = FpsCache(N_POINTS_L0_MAX, False, args.seed, keep)
     counts = class_counts(train_paths, target_ids)
-    weights = class_weights(counts)
+    weights = class_weights(counts, args.class_weight_power)
     run_info = {
         "target": args.target, "target_ids": list(target_ids), "features": args.features,
         "seed": args.seed, "epochs": args.epochs, "n_trials": args.n_trials,
@@ -155,7 +201,7 @@ def main(argv=None):
         "data_dir": str(args.data_dir), "fixed_params": str(args.fixed_params or ""),
         "train_points": {"background": int(counts[0]), "target": int(counts[1])},
         "class_weights": [round(float(w), 4) for w in weights],
-        "loss": "ce" if args.loss == "ce" else f"focal(gamma={args.focal_gamma:g})",
+        **training,
         "optimizer": "AdamW", "amp": amp,
         "device": torch.cuda.get_device_name(0) if device.type == "cuda" else platform.processor(),
         "versions": {"python": platform.python_version(), "torch": torch.__version__,
@@ -209,7 +255,7 @@ def main(argv=None):
             train=[p.name for p in train_paths], val=[p.name for p in val_paths]),
             indent=2, ensure_ascii=False), encoding="utf-8")
         model = build_model(params, FEATURE_CHANNELS[args.features]).to(device)
-        criterion = make_criterion(args.loss, weights, args.focal_gamma)
+        criterion = make_criterion(args.loss, weights, args.focal_gamma, args.lovasz_weight)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params["lr"],
                                       weight_decay=params["weight_decay"])
         scaler = torch.amp.GradScaler(device.type, enabled=amp)
@@ -233,13 +279,14 @@ def main(argv=None):
                 # меняются по ходу эпохи): без второго прохода по Train.
                 train_counts = torch.zeros(4, dtype=torch.long, device=device)
                 start, n_batches = time.time(), len(train_loader)
-                for step, (feat, batch, y, keys) in enumerate(train_loader, 1):
+                for step, (feat, batch, y, keys, *point_weight) in enumerate(train_loader, 1):
                     feat, batch, y = feat.to(device), batch.to(device), y.to(device)
+                    point_weight = point_weight[0].to(device) if point_weight else None
                     optimizer.zero_grad(set_to_none=True)
                     with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
                         out = forward(model, feat, batch, keys, train_cache)
                     out = out.float()  # loss в fp32: exp в focal и веса классов без потери точности
-                    loss = criterion(out, y)
+                    loss = criterion(out, y, point_weight)
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
                     scaler.update()

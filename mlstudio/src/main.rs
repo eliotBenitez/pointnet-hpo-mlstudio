@@ -554,9 +554,17 @@ struct Studio {
     imported: Vec<PathBuf>,
     test_eval: Option<serde_json::Value>,
     test_note: Option<(bool, String)>,
-    /// Функция потерь: "ce" или "focal" (--loss в hpo_pointnet.py / run_all.py).
+    /// Функция потерь: "ce", "focal" или "focal_lovasz" (--loss в hpo_pointnet.py / run_all.py).
     loss: &'static str,
     focal_gamma: Entity<InputState>,
+    lovasz_weight: Entity<InputState>,
+    weight_power: Entity<InputState>,
+    /// Баланс патчей Train (--equibatch): центр на точке цели или фона.
+    equibatch: bool,
+    positive_fraction: Entity<InputState>,
+    boundary_fraction: Entity<InputState>,
+    boundary_weight: Entity<InputState>,
+    boundary_radius: Entity<InputState>,
     extra: Entity<InputState>,
     /// Своя конфигурация гиперпараметров (иначе всё подбирает Optuna).
     custom: bool,
@@ -719,6 +727,13 @@ impl Studio {
             test_eval: None,
             test_note: None,
             focal_gamma: input("2", ""),
+            lovasz_weight: input("0.5", ""),
+            weight_power: input("1", ""),
+            equibatch: false,
+            positive_fraction: input("0.5", ""),
+            boundary_fraction: input("0", ""),
+            boundary_weight: input("1", ""),
+            boundary_radius: input("0.5", ""),
             extra: input("", "например --patch-points 8192"),
             root,
             _tick: tick,
@@ -1072,6 +1087,21 @@ impl Studio {
         cx.notify();
     }
 
+    /// Настройки обучения из формы.
+    fn train_opts(&self, cx: &App) -> TrainOpts {
+        let v = |i: &Entity<InputState>| i.read(cx).value().trim().to_string();
+        TrainOpts {
+            loss: self.loss.into(),
+            gamma: v(&self.focal_gamma),
+            lovasz: v(&self.lovasz_weight),
+            power: v(&self.weight_power),
+            positive: self.equibatch.then(|| v(&self.positive_fraction)),
+            bfrac: v(&self.boundary_fraction),
+            bweight: v(&self.boundary_weight),
+            bradius: v(&self.boundary_radius),
+        }
+    }
+
     /// Аргументы командной строки из формы запуска.
     fn command(&self, cx: &App) -> (String, Vec<String>, String) {
         let v = |i: &Entity<InputState>| i.read(cx).value().trim().to_string();
@@ -1093,8 +1123,8 @@ impl Studio {
             ]);
         } else {
             let suffix = if self.custom { "_custom" } else { "" };
-            // Study с другим loss hpo_pointnet.py не продолжит: focal по умолчанию в свой каталог.
-            let focal = focal_suffix(self.loss, &v(&self.focal_gamma));
+            // Study с другими настройками обучения hpo_pointnet.py не продолжит: по умолчанию свой каталог.
+            let focal = self.train_opts(cx).suffix();
             let name = Some(v(&self.out_name))
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("{}_{}{focal}{suffix}", self.target, self.features));
@@ -1129,14 +1159,7 @@ impl Studio {
         ] {
             args.extend([k.into(), v(i)]);
         }
-        if self.loss == "focal" {
-            args.extend([
-                "--loss".into(),
-                "focal".into(),
-                "--focal-gamma".into(),
-                v(&self.focal_gamma),
-            ]);
-        }
+        args.extend(self.train_opts(cx).args());
         args.extend(v(&self.extra).split_whitespace().map(String::from));
         (v(&self.python), args, title)
     }
@@ -1781,7 +1804,7 @@ impl Studio {
         }
         let args = final_run_args(
             best,
-            &run.loss(),
+            &TrainOpts::from_info(&run.loss(), |k| json_scalar(best.get(k))),
             &run.target().unwrap_or_default(),
             &run.features().unwrap_or_else(|| "xyz".into()),
             &final_data,
@@ -1814,16 +1837,23 @@ impl Studio {
             info("patch_points"),
             info("patches_per_scene"),
         );
-        self.loss = if loss.starts_with("focal") {
-            "focal"
-        } else {
-            "ce"
+        let t = TrainOpts::from_info(&loss, &info);
+        self.loss = match t.loss.as_str() {
+            "focal" => "focal",
+            "focal_lovasz" => "focal_lovasz",
+            _ => "ce",
         };
-        if let Some(g) = loss
-            .strip_prefix("focal(gamma=")
-            .and_then(|g| g.strip_suffix(')'))
-        {
-            Self::set_input(&self.focal_gamma, g.to_string(), window, cx);
+        self.equibatch = t.positive.is_some();
+        for (input, v) in [
+            (&self.focal_gamma, t.gamma),
+            (&self.lovasz_weight, t.lovasz),
+            (&self.weight_power, t.power),
+            (&self.positive_fraction, t.positive.unwrap_or_else(|| "0.5".into())),
+            (&self.boundary_fraction, t.bfrac),
+            (&self.boundary_weight, t.bweight),
+            (&self.boundary_radius, t.bradius),
+        ] {
+            Self::set_input(input, v, window, cx);
         }
         if let Some(t) = target.and_then(|t| TARGETS.iter().find(|x| **x == t)) {
             self.target = t;
@@ -4627,8 +4657,7 @@ impl Studio {
         // --fixed-params ставится первым trial только в пустой study (hpo_pointnet.py).
         let final_data = self.final_data_dir.read(cx).value().trim().to_string();
         let data = self.data_dir.read(cx).value().trim().to_string();
-        let gamma = self.focal_gamma.read(cx).value().trim().to_string();
-        let gamma_valid = self.loss != "focal" || gamma.parse::<f64>().is_ok_and(|g| g > 0.);
+        let train_error = self.train_opts(cx).error();
         let patch_valid = [&self.patch_points, &self.patches_per_scene]
             .iter()
             .all(|i| {
@@ -4649,8 +4678,8 @@ impl Studio {
             Some("Выберите существующий каталог данных.".into())
         } else if !patch_valid {
             Some("Число точек в патче и патчей на сцену должно быть положительным.".into())
-        } else if !gamma_valid {
-            Some("Gamma для Focal Loss должна быть положительным числом.".into())
+        } else if let Some(e) = train_error {
+            Some(e.into())
         } else if [&self.trials, &self.epochs, &self.final_epochs]
             .iter()
             .any(|i| {
@@ -4877,16 +4906,77 @@ impl Studio {
                                     .child(choice("loss-focal", "Focal Loss", self.loss == "focal").on_click(cx.listener(|this, _, _, cx| {
                                         this.loss = "focal";
                                         cx.notify();
+                                    })))
+                                    .child(choice("loss-lovasz", "Focal + Lovász", self.loss == "focal_lovasz").on_click(cx.listener(|this, _, _, cx| {
+                                        this.loss = "focal_lovasz";
+                                        cx.notify();
                                     }))),
                             )
-                            .when(self.loss == "focal", |d| d.child(field("Gamma", &self.focal_gamma).w(px(120.)))),
+                            .when(self.loss != "ce", |d| d.child(field("Gamma", &self.focal_gamma).w(px(120.))))
+                            .when(self.loss == "focal_lovasz", |d| d.child(field("Доля Lovász", &self.lovasz_weight).w(px(120.)))),
                     )
-                    .child(h_flex().child(Button::new("quick").icon(Icon::new(Lucide::Zap)).label("Быстрая проверка: 1 trial, 1 эпоха").outline().small().on_click(cx.listener(|this, _, window, cx| {
-                        Self::set_input(&this.trials, "1".into(), window, cx);
-                        Self::set_input(&this.epochs, "1".into(), window, cx);
-                        cx.notify();
-                    }))))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .items_end()
+                            .child(field("Степень весов классов", &self.weight_power).w(px(200.)))
+                            .child(div().pb_2().text_xs().text_color(p.muted).child("1 — обратные частоты классов, меньше — мягче (для редких классов 0.4–0.5), 0 — без весов.")),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Button::new("quick").icon(Icon::new(Lucide::Zap)).label("Быстрая проверка: 1 trial, 1 эпоха").outline().small().on_click(cx.listener(|this, _, window, cx| {
+                                Self::set_input(&this.trials, "1".into(), window, cx);
+                                Self::set_input(&this.epochs, "1".into(), window, cx);
+                                cx.notify();
+                            })))
+                            .child(Button::new("rare").label("Редкий класс: Focal + Lovász, баланс и граница").outline().small().tooltip("Focal + Lovász 0.5, степень весов 0.47, 8 патчей на сцену: половина на границе, остальные поровну на цели и фоне, вес граничных точек 2, признаки xyz_hag").on_click(cx.listener(|this, _, window, cx| {
+                                this.loss = "focal_lovasz";
+                                this.equibatch = true;
+                                this.features = "xyz_hag";
+                                for (input, v) in [
+                                    (&this.focal_gamma, "2"),
+                                    (&this.lovasz_weight, "0.5"),
+                                    (&this.weight_power, "0.47"),
+                                    (&this.positive_fraction, "0.5"),
+                                    (&this.boundary_fraction, "0.5"),
+                                    (&this.boundary_weight, "2"),
+                                    (&this.boundary_radius, "0.5"),
+                                    (&this.patches_per_scene, "8"),
+                                ] {
+                                    Self::set_input(input, v.into(), window, cx);
+                                }
+                                cx.notify();
+                            }))),
+                    )
                     .child(h_flex().gap_3().child(field("Точек в патче", &self.patch_points).flex_1()).child(field("Патчей на сцену", &self.patches_per_scene).flex_1()))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(choice("patch-random", "Центр патча случайный", !self.equibatch).on_click(cx.listener(|this, _, _, cx| {
+                                this.equibatch = false;
+                                cx.notify();
+                            })))
+                            .child(choice("patch-balance", "Баланс: цель / фон", self.equibatch).on_click(cx.listener(|this, _, _, cx| {
+                                this.equibatch = true;
+                                cx.notify();
+                            }))),
+                    )
+                    .when(self.equibatch, |d| {
+                        d.child(
+                            h_flex()
+                                .gap_3()
+                                .child(field("Доля патчей с центром на цели", &self.positive_fraction).flex_1())
+                                .child(field("Доля граничных патчей", &self.boundary_fraction).flex_1()),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(field("Вес граничных точек", &self.boundary_weight).flex_1())
+                            .child(field("Радиус границы (ед. координат)", &self.boundary_radius).flex_1()),
+                    )
+                    .child(div().text_xs().text_color(p.muted).child("Только Train, Val не меняется. Граничная точка — та, у которой в радиусе есть точка другого класса. Вес 1 и доля 0 — выключено."))
                     .child(section("Окружение"))
                     .child(h_flex().gap_3().child(field("Данные для подбора", &self.data_dir).flex_1()).child(field("Python", &self.python).flex_1()))
                     .child(field("Каталог результатов", &self.runs_dir))
@@ -8219,12 +8309,9 @@ fn remove_stale_predictions(dir: &Path, keep: &str) {
     }
 }
 
-/// Имя прогона по умолчанию: <класс>_<признаки>, у Focal Loss — с суффиксом _focal (свой study).
+/// Имя прогона по умолчанию: <класс>_<признаки> и суффикс настроек обучения (свой study).
 fn auto_name(args: &[String]) -> String {
-    let focal = focal_suffix(
-        &Job::arg(args, "--loss").unwrap_or_default(),
-        &Job::arg(args, "--focal-gamma").unwrap_or_default(),
-    );
+    let focal = TrainOpts::from_args(args).suffix();
     format!(
         "{}_{}{focal}",
         Job::arg(args, "--target").unwrap_or_default(),
@@ -8232,12 +8319,195 @@ fn auto_name(args: &[String]) -> String {
     )
 }
 
-/// Суффикс имени прогона для loss: у Focal Loss и у каждой gamma свой study (gamma 2 — без числа, как в run_all.py).
-fn focal_suffix(loss: &str, gamma: &str) -> String {
-    match gamma.trim().parse::<f64>() {
-        _ if loss != "focal" => String::new(),
-        Ok(g) if g != 2. => format!("_focal_g{g}"),
-        _ => "_focal".into(),
+/// Настройки обучения сверх гиперпараметров Optuna: loss, веса классов, баланс и граница патчей.
+/// Study сверяет их (COMPATIBILITY_FIELDS в hpo_core/study.py), поэтому у каждого набора свой
+/// каталог прогона — `suffix()`, тот же, что строит run_all.py.
+#[derive(Clone, Debug, PartialEq)]
+struct TrainOpts {
+    /// "ce", "focal" или "focal_lovasz" (--loss).
+    loss: String,
+    gamma: String,
+    lovasz: String,
+    power: String,
+    /// Some(доля патчей с центром на цели) — --equibatch.
+    positive: Option<String>,
+    bfrac: String,
+    bweight: String,
+    bradius: String,
+}
+
+impl Default for TrainOpts {
+    fn default() -> Self {
+        let s = |v: &str| v.to_string();
+        Self {
+            loss: s("ce"),
+            gamma: s("2"),
+            lovasz: s("0.5"),
+            power: s("1"),
+            positive: None,
+            bfrac: s("0"),
+            bweight: s("1"),
+            bradius: s("0.5"),
+        }
+    }
+}
+
+fn num(s: &str) -> Option<f64> {
+    s.trim().parse::<f64>().ok().filter(|x| x.is_finite())
+}
+
+impl TrainOpts {
+    /// По флагам командной строки hpo_pointnet.py.
+    fn from_args(args: &[String]) -> Self {
+        let d = Self::default();
+        let get = |k: &str, d: String| Job::arg(args, k).unwrap_or(d);
+        Self {
+            positive: args
+                .iter()
+                .any(|a| a == "--equibatch")
+                .then(|| get("--equibatch-positive-fraction", "0.5".into())),
+            loss: get("--loss", d.loss),
+            gamma: get("--focal-gamma", d.gamma),
+            lovasz: get("--lovasz-weight", d.lovasz),
+            power: get("--class-weight-power", d.power),
+            bfrac: get("--boundary-patch-fraction", d.bfrac),
+            bweight: get("--boundary-weight", d.bweight),
+            bradius: get("--boundary-radius", d.bradius),
+        }
+    }
+
+    /// По run_info прогона (best.json/split.json): строка loss и поля, которые пишет hpo_pointnet.py.
+    fn from_info(loss: &str, info: impl Fn(&str) -> Option<String>) -> Self {
+        let d = Self::default();
+        let gamma = loss.split("focal(gamma=").nth(1).and_then(|r| r.split(')').next());
+        let lovasz = loss.rsplit_once('+').and_then(|(_, r)| r.strip_suffix("*lovasz"));
+        let kind = if lovasz.is_some() {
+            "focal_lovasz"
+        } else if loss.starts_with("focal") {
+            "focal"
+        } else {
+            "ce"
+        };
+        Self {
+            loss: kind.into(),
+            gamma: gamma.map_or(d.gamma, String::from),
+            lovasz: lovasz.map_or(d.lovasz, String::from),
+            power: info("class_weight_power").unwrap_or(d.power),
+            positive: info("positive_fraction"),
+            bfrac: info("boundary_fraction").unwrap_or(d.bfrac),
+            bweight: info("boundary_weight").unwrap_or(d.bweight),
+            bradius: info("boundary_radius").unwrap_or(d.bradius),
+        }
+    }
+
+    fn differs(v: &str, default: f64) -> bool {
+        num(v) != Some(default)
+    }
+
+    fn boundary(&self) -> bool {
+        Self::differs(&self.bfrac, 0.) || Self::differs(&self.bweight, 1.)
+    }
+
+    /// Флаги для hpo_pointnet.py / run_all.py; значения по умолчанию не пишутся.
+    fn args(&self) -> Vec<String> {
+        let mut a: Vec<String> = vec![];
+        let mut push = |k: &str, v: &str| a.extend([k.to_string(), v.trim().to_string()]);
+        if self.loss != "ce" {
+            push("--loss", &self.loss);
+            push("--focal-gamma", &self.gamma);
+        }
+        if self.loss == "focal_lovasz" {
+            push("--lovasz-weight", &self.lovasz);
+        }
+        if Self::differs(&self.power, 1.) {
+            push("--class-weight-power", &self.power);
+        }
+        if let Some(f) = &self.positive {
+            push("--equibatch-positive-fraction", f);
+        }
+        if Self::differs(&self.bfrac, 0.) {
+            push("--boundary-patch-fraction", &self.bfrac);
+        }
+        if Self::differs(&self.bweight, 1.) {
+            push("--boundary-weight", &self.bweight);
+        }
+        if self.boundary() && Self::differs(&self.bradius, 0.5) {
+            push("--boundary-radius", &self.bradius);
+        }
+        if self.positive.is_some() {
+            a.push("--equibatch".into());
+        }
+        a
+    }
+
+    /// Суффикс имени прогона (как в run_all.py): у Focal Loss и каждой gamma свой study,
+    /// значения по умолчанию (gamma 2 и т. д.) — без чисел.
+    fn suffix(&self) -> String {
+        let n = |v: &str| num(v).map_or_else(|| v.trim().to_string(), |x| x.to_string());
+        let mut s = String::new();
+        match self.loss.as_str() {
+            "focal" => s += "_focal",
+            "focal_lovasz" => s += "_focal_lovasz",
+            _ => {}
+        }
+        if self.loss != "ce" && Self::differs(&self.gamma, 2.) {
+            s += &format!("_g{}", n(&self.gamma));
+        }
+        if self.loss == "focal_lovasz" && Self::differs(&self.lovasz, 0.5) {
+            s += &format!("_lw{}", n(&self.lovasz));
+        }
+        if Self::differs(&self.power, 1.) {
+            s += &format!("_cw{}", n(&self.power));
+        }
+        if let Some(f) = &self.positive {
+            s += "_eq";
+            if Self::differs(f, 0.5) {
+                s += &n(f);
+            }
+        }
+        if Self::differs(&self.bfrac, 0.) {
+            s += &format!("_bf{}", n(&self.bfrac));
+        }
+        if Self::differs(&self.bweight, 1.) {
+            s += &format!("_bw{}", n(&self.bweight));
+        }
+        if self.boundary() && Self::differs(&self.bradius, 0.5) {
+            s += &format!("_br{}", n(&self.bradius));
+        }
+        s
+    }
+
+    /// Текст ошибки для формы (те же ограничения, что проверяет hpo_pointnet.py).
+    fn error(&self) -> Option<&'static str> {
+        let within = |v: &str, lo: f64, hi: f64| num(v).is_some_and(|x| (lo..=hi).contains(&x));
+        if self.loss != "ce" && !num(&self.gamma).is_some_and(|g| g > 0.) {
+            Some("Gamma для Focal Loss должна быть положительным числом.")
+        } else if self.loss == "focal_lovasz" && !within(&self.lovasz, 0., 1.) {
+            Some("Доля Lovász должна быть от 0 до 1.")
+        } else if !within(&self.power, 0., 1.) {
+            Some("Степень весов классов должна быть от 0 до 1.")
+        } else if self
+            .positive
+            .as_deref()
+            .is_some_and(|f| !num(f).is_some_and(|x| x > 0. && x < 1.))
+        {
+            Some("Доля патчей с центром на цели должна быть строго между 0 и 1.")
+        } else if !num(&self.bfrac).is_some_and(|x| (0. ..1.).contains(&x)) {
+            Some("Доля граничных патчей должна быть от 0 до 1 (не включая 1).")
+        } else if Self::differs(&self.bfrac, 0.) && self.positive.is_none() {
+            Some("Граничные патчи работают только с балансом патчей «цель / фон».")
+        } else if !num(&self.bweight).is_some_and(|x| x >= 1.) {
+            Some("Вес граничных точек должен быть не меньше 1.")
+        } else if !num(&self.bradius).is_some_and(|x| x > 0.) {
+            Some("Радиус границы должен быть положительным.")
+        } else if Self::differs(&self.bweight, 1.)
+            && self.loss == "focal_lovasz"
+            && !Self::differs(&self.lovasz, 1.)
+        {
+            Some("Вес граничных точек действует только на Focal-часть: уменьшите долю Lovász.")
+        } else {
+            None
+        }
     }
 }
 
@@ -8306,6 +8576,14 @@ fn pred_run_path(root: &Path, p: &Path) -> String {
 }
 
 /// Число или строка из JSON-артефакта — в строку аргумента CLI; пусто/не скаляр — умолчание.
+/// Строка или число из JSON как текст; иначе None (null у выключенных настроек).
+fn json_scalar(v: Option<&serde_json::Value>) -> Option<String> {
+    match v? {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        v => v.is_number().then(|| v.to_string()),
+    }
+}
+
 fn json_scalar_str(v: Option<&serde_json::Value>, default: &str) -> String {
     match v {
         Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
@@ -8318,7 +8596,7 @@ fn json_scalar_str(v: Option<&serde_json::Value>, default: &str) -> String {
 /// --fixed-params и каталог final_<имя>. Эпохи/воркеры — из формы.
 fn final_run_args(
     best: &serde_json::Value,
-    loss: &str,
+    train: &TrainOpts,
     target: &str,
     features: &str,
     final_data: &str,
@@ -8354,18 +8632,7 @@ fn final_run_args(
         "--workers".into(),
         workers.to_string(),
     ];
-    if loss.starts_with("focal") {
-        let gamma = loss
-            .strip_prefix("focal(gamma=")
-            .and_then(|g| g.strip_suffix(')'))
-            .unwrap_or("2");
-        args.extend([
-            "--loss".into(),
-            "focal".into(),
-            "--focal-gamma".into(),
-            gamma.to_string(),
-        ]);
-    }
+    args.extend(train.args());
     args
 }
 
@@ -8742,7 +9009,7 @@ mod tests {
             "seed": 42, "patch_points": 1024, "patches_per_scene": 3, "params": {"lr": 0.01}
         });
         let args = super::final_run_args(
-            &best, "ce", "ground", "xyz", "exports_final",
+            &best, &super::TrainOpts::default(), "ground", "xyz", "exports_final",
             "runs/final_ground_xyz", "runs/ground_xyz.params.json", "30", "2",
         );
         let get = |k: &str| {
@@ -8811,7 +9078,7 @@ mod tests {
     fn final_run_args_focal_gamma_and_defaults() {
         let best = serde_json::json!({"params": {}});
         let args = super::final_run_args(
-            &best, "focal(gamma=1.5)", "noise", "xyz_hag", "fin",
+            &best, &super::TrainOpts::from_info("focal(gamma=1.5)", |_| None), "noise", "xyz_hag", "fin",
             "out/final_noise", "out/noise.params.json", "5", "0",
         );
         let get = |k: &str| {
@@ -8822,6 +9089,31 @@ mod tests {
         assert_eq!(get("--seed"), "42");
         assert_eq!(get("--patch-points"), "16384");
         assert_eq!(get("--patches-per-scene"), "2");
+    }
+
+    /// Настройки из run_info лучшего прогона дают те же флаги и тот же каталог, что и форма.
+    #[test]
+    fn train_opts_from_run_info() {
+        let best = serde_json::json!({"class_weight_power": 0.47, "positive_fraction": 0.5,
+            "boundary_fraction": 0.5, "boundary_weight": 2.0, "boundary_radius": 0.5,
+            "boundary_space": "xyz"});
+        let t = super::TrainOpts::from_info("(1-0.5)*focal(gamma=2)+0.5*lovasz", |k| super::json_scalar(best.get(k)));
+        assert_eq!(t.loss, "focal_lovasz");
+        assert_eq!(t.suffix(), "_focal_lovasz_cw0.47_eq_bf0.5_bw2");
+        let args = t.args();
+        let get = |k: &str| super::Job::arg(&args, k);
+        assert_eq!(get("--loss").as_deref(), Some("focal_lovasz"));
+        assert_eq!(get("--lovasz-weight").as_deref(), Some("0.5"));
+        assert_eq!(get("--class-weight-power").as_deref(), Some("0.47"));
+        assert!(args.iter().any(|a| a == "--equibatch"));
+        assert_eq!(get("--boundary-radius"), None); // 0.5 — по умолчанию
+        assert_eq!(super::TrainOpts::from_args(&args).suffix(), t.suffix());
+        assert_eq!(t.error(), None);
+        // Старый прогон без новых полей: прежние CE и пустой суффикс.
+        let old = super::TrainOpts::from_info("ce", |_| None);
+        assert_eq!((old.args(), old.suffix()), (vec![], String::new()));
+        let bad = super::TrainOpts { bfrac: "0.5".into(), ..Default::default() };
+        assert!(bad.error().is_some()); // граница без баланса патчей
     }
 
     #[test]
